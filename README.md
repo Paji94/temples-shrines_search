@@ -19,7 +19,7 @@ APIキー不要・無料の API だけで動きます。
 - 住所の補完: Nominatim（1秒1件まで）
 - 概要文: Wikipedia（日本語版）
 - 宗派: Wikidata
-- 地図: 国土地理院 淡色地図 / OpenStreetMap、表示は Leaflet
+- 地図: OpenStreetMap（初期表示）/ 国土地理院 淡色地図、表示は Leaflet
 
 ## 御朱印の記録について
 
