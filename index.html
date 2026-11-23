@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="御朱印マップ">
+<meta name="theme-color" content="#a8402f">
+<title>寺社めぐり 御朱印マップ</title>
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAIAAACyr5FlAAAB7ElEQVR4Xu3d0QmCUBiA0Yz2sRFqila0KVqhkXro1cgPhFtwzrNdQuT7uyo0LZf5AGuOTgufuDhwcdApB8pBpxwoB51yoBx0yoFy0CkHykGnHCgHnXKgHHTKgXLQKQfKQaccKAedcqAcdMqBctApB8pBpxwoB51yoBx0yoFy0CkHykGnHCgHnXKgHHTKgXLQKQfKQXfqH/nu9nh+P4i93a/nfZc0VjBW6JQD5aBTDpSDTjlQDjrlQDnolAPloJv+5e/K08O8jY+gNq6572pvG9ccy1jBWKFTDpSDTjlQDrphW9mN20gGbn2NFYwVOuVAOeiUA+WgUw6Ug045UA66YbfPq3S7fch7Vr//DStjBWOFTjlQDjrlQDnolAPloFMOlINOOVAOOuVAOeiUA+WgUw6Ug045UA465UA56JQD5aBTDpSDTjlQDjrlQDnolAPloFMOlINOOVAOOuVAOeiUA+WgUw6Ug045UA465UA56JQD5aBTDpSDTjlQDjrlQDnolAPloFMOlINOOVAOOuVAOeiUA+WgUw6Ug045UA465UA56JQD5aBTDj6alsvs9LBKOfCbg045UA465UA56JQD5aBTDpSDTjlQDjrlQDnolAPloFMOlINOOVAOOuVAOeiUA+WgUw6Ug045UA66Fw/rG9kTlKNuAAAAAElFTkSuQmCC">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --shu: #a8402f; --shu-dark: #7e2c20; --sumi: #2b2622; --washi: #faf7f1; --line: #e6dfd2;
+    --muted: #857b6f; --gold: #c9a227; --shrine: #c0392b; --temple: #6b4f2a;
+    --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--washi); color: var(--sumi);
+    font-family: system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+  #map { position: fixed; inset: 0; z-index: 1; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .muted { color: var(--muted); }
+  [hidden] { display: none !important; }
+
+  /* ── 上部バー ── */
+  #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; padding: calc(var(--safe-top) + 8px) 10px 8px;
+    background: linear-gradient(to bottom, rgba(250,247,241,.97) 70%, rgba(250,247,241,0)); pointer-events: none; }
+  #topbar > * { pointer-events: auto; }
+  .titleRow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .titleRow h1 { font-size: 16px; margin: 0; color: var(--shu-dark); letter-spacing: .05em; white-space: nowrap; }
+  #q { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); font-size: 16px; background: #fff; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
+  .chip.on { background: var(--shu); border-color: var(--shu); color: #fff; }
+
+  #areaBtn { position: fixed; z-index: 1000; left: 50%; transform: translateX(-50%); top: calc(var(--safe-top) + 100px);
+    padding: 9px 16px; border-radius: 999px; border: none; background: #fff; color: var(--shu-dark); font-weight: 600; font-size: 14px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.18); white-space: nowrap; }
+  #areaBtn:disabled { opacity: .7; }
+
+  /* ── 右下ボタン ── */
+  #fabs { position: fixed; z-index: 1000; right: 12px; bottom: calc(var(--safe-bottom) + 24px); display: flex; flex-direction: column; gap: 10px; }
+  .fab { width: 52px; height: 52px; border-radius: 50%; border: none; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.2);
+    font-size: 22px; display: grid; place-items: center; position: relative; }
+  .fab.main { background: var(--shu); color: #fff; }
+  .fab .cnt { position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; border-radius: 10px; background: var(--gold); color: #fff;
+    font-size: 11px; font-weight: 700; display: grid; place-items: center; padding: 0 5px; }
+  .fab small { position: absolute; bottom: -15px; font-size: 10px; color: var(--sumi); white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+
+  /* ── ピン ── */
+  .pin { background: none; border: none; }
+  .pin-in { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 15px; font-weight: 700;
+    border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); position: relative; }
+  .pin-in.shinto { background: var(--shrine); }
+  .pin-in.buddhist { background: var(--temple); }
+  .pin-in.visited { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold), 0 1px 5px rgba(0,0,0,.4); }
+  .pin-in b { position: absolute; top: -8px; right: -8px; background: var(--gold); color: #fff; font-size: 10px; min-width: 16px; height: 16px;
+    border-radius: 8px; display: grid; place-items: center; padding: 0 3px; border: 1px solid #fff; }
+  .here-dot { width: 16px; height: 16px; border-radius: 50%; background: #1a73e8; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(26,115,232,.25); }
+
+  /* ── 下から出る詳細シート ── */
+  #sheet { position: fixed; z-index: 1100; left: 0; right: 0; bottom: 0; max-height: 72vh; overflow-y: auto; background: var(--washi);
+    border-radius: 16px 16px 0 0; box-shadow: 0 -4px 20px rgba(0,0,0,.2); padding: 8px 16px calc(var(--safe-bottom) + 20px);
+    transform: translateY(105%); transition: transform .25s ease; -webkit-overflow-scrolling: touch; }
+  #sheet.open { transform: translateY(0); }
+  @media (min-width: 760px) { #sheet { left: 12px; right: auto; width: 420px; bottom: 12px; border-radius: 16px; max-height: calc(100vh - 140px); } }
+  .grab { width: 40px; height: 5px; border-radius: 3px; background: #d6cfc2; margin: 2px auto 8px; }
+  .sheetHead { display: flex; align-items: flex-start; gap: 8px; }
+  .sheetHead h2 { margin: 0; font-size: 20px; flex: 1; line-height: 1.35; }
+  .x { border: none; background: #eee8dc; width: 32px; height: 32px; border-radius: 50%; font-size: 16px; flex: none; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 4px; color: #fff; vertical-align: 3px; margin-right: 6px; }
+  .badge.shinto { background: var(--shrine); } .badge.buddhist { background: var(--temple); }
+  .kv { font-size: 14px; line-height: 1.7; margin: 8px 0; }
+  .kv div { display: flex; gap: 8px; } .kv dt { flex: none; width: 3.5em; color: var(--muted); } .kv dd { margin: 0; flex: 1; word-break: break-all; }
+  .summary { font-size: 14px; line-height: 1.75; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+  .summary.clamp { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .linkRow { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .linkRow a, .linkRow button { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--shu-dark); text-decoration: none; }
+  .note { font-size: 11px; color: var(--muted); }
+  h3.sec { font-size: 15px; margin: 18px 0 8px; display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .btnMain { width: 100%; padding: 13px; border-radius: 12px; border: none; background: var(--shu); color: #fff; font-size: 16px; font-weight: 600; }
+  .btnSub { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--shu); background: #fff; color: var(--shu); font-size: 14px; }
+
+  /* 御朱印カード */
+  .rec { display: flex; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin-bottom: 8px; align-items: flex-start; }
+  .rec .thumb { width: 72px; height: 96px; flex: none; border-radius: 6px; object-fit: cover; background: #f1ece2; display: grid; place-items: center; color: var(--muted); font-size: 24px; border: 1px solid var(--line); }
+  .rec .body { flex: 1; min-width: 0; font-size: 14px; line-height: 1.55; }
+  .rec .date { font-weight: 700; color: var(--shu-dark); }
+  .rec .memo { white-space: pre-wrap; word-break: break-word; }
+  .rec .ops { display: flex; gap: 6px; margin-top: 6px; }
+  .rec .ops button { font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: #faf7f1; }
+
+  /* ── 全画面パネル（一覧・御朱印帳） ── */
+  .panel { position: fixed; inset: 0; z-index: 1200; background: var(--washi); display: flex; flex-direction: column; }
+  .panelHead { padding: calc(var(--safe-top) + 10px) 14px 10px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: #fff; }
+  .panelHead h2 { margin: 0; font-size: 18px; flex: 1; }
+  .panelBody { flex: 1; overflow-y: auto; padding: 12px 14px calc(var(--safe-bottom) + 20px); -webkit-overflow-scrolling: touch; }
+  .stats { display: flex; gap: 8px; margin-bottom: 12px; }
+  .stat { flex: 1; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px; text-align: center; }
+  .stat b { display: block; font-size: 24px; color: var(--shu-dark); } .stat span { font-size: 12px; color: var(--muted); }
+  .item { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 6px; width: 100%; text-align: left; }
+  .item .nm { flex: 1; min-width: 0; font-size: 15px; } .item .nm small { display: block; color: var(--muted); font-size: 12px; }
+  .item .dist { font-size: 12px; color: var(--muted); flex: none; }
+  .backup { margin-top: 20px; padding: 12px; border-radius: 12px; background: #fff; border: 1px dashed var(--shu); font-size: 13px; line-height: 1.6; }
+  .backup .row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 10px; line-height: 1.8; }
+
+  /* ── 記録フォーム ── */
+  .modalBg { position: fixed; inset: 0; z-index: 1300; background: rgba(0,0,0,.45); display: grid; place-items: end center; }
+  @media (min-width: 760px) { .modalBg { place-items: center; } }
+  .modal { width: 100%; max-width: 480px; background: var(--washi); border-radius: 16px 16px 0 0; padding: 16px 16px calc(var(--safe-bottom) + 18px); max-height: 92vh; overflow-y: auto; }
+  @media (min-width: 760px) { .modal { border-radius: 16px; } }
+  .modal h2 { margin: 0 0 4px; font-size: 18px; }
+  .modal label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  .modal input[type=date], .modal textarea { width: 100%; padding: 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 10px; background: #fff; font-family: inherit; }
+  .modal textarea { min-height: 90px; resize: vertical; }
+  .photoPick { display: flex; gap: 10px; align-items: center; }
+  .photoPick img { width: 84px; height: 112px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+  .photoPick .ph { width: 84px; height: 112px; border-radius: 8px; border: 2px dashed var(--line); display: grid; place-items: center; color: var(--muted); font-size: 28px; }
+  .modal .actions { display: flex; gap: 8px; margin-top: 16px; } .modal .actions > * { flex: 1; }
+
+  #viewer { position: fixed; inset: 0; z-index: 1400; background: rgba(0,0,0,.92); display: grid; place-items: center; padding: 20px; }
+  #viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+
+  #toast { position: fixed; z-index: 1500; left: 50%; bottom: calc(var(--safe-bottom) + 96px); transform: translateX(-50%); max-width: calc(100% - 32px);
+    background: rgba(43,38,34,.92); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; line-height: 1.5; opacity: 0; transition: opacity .2s; pointer-events: none; white-space: pre-wrap; }
+  #toast.show { opacity: 1; } #toast.err { background: rgba(160,30,30,.95); }
+  .leaflet-control-attribution { font-size: 10px; }
+  .leaflet-bottom.leaflet-left { margin-bottom: var(--safe-bottom); }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="topbar">
+  <div class="titleRow">
+    <h1>⛩ 御朱印マップ</h1>
+    <input id="q" type="search" placeholder="名前で絞り込み（例: 八幡）" enterkeyhint="search">
+  </div>
+  <div class="chips" id="chips">
+    <button class="chip on" data-kind="all">すべて</button>
+    <button class="chip" data-kind="shinto">⛩ 神社</button>
+    <button class="chip" data-kind="buddhist">卍 寺院</button>
+    <button class="chip" data-kind="visited">🔴 御朱印あり</button>
+    <button class="chip" data-kind="notyet">未訪問</button>
+  </div>
+</div>
+
+<button id="areaBtn">🔍 このエリアを検索</button>
+
+<div id="fabs">
+  <button class="fab" id="btnLocate" aria-label="現在地">📍</button>
+  <button class="fab" id="btnList" aria-label="一覧">📋</button>
+  <button class="fab main" id="btnBook" aria-label="御朱印帳">📖<span class="cnt" id="bookCnt" hidden>0</span></button>
+</div>
+
+<div id="sheet" aria-live="polite"><div class="grab"></div><div id="sheetBody"></div></div>
+
+<div class="panel" id="listPanel" hidden>
+  <div class="panelHead"><h2 id="listTitle">表示中の寺社</h2><button class="x" data-close="listPanel">✕</button></div>
+  <div class="panelBody" id="listBody"></div>
+</div>
+
+<div class="panel" id="bookPanel" hidden>
+  <div class="panelHead"><h2>📖 御朱印帳</h2><button class="x" data-close="bookPanel">✕</button></div>
+  <div class="panelBody" id="bookBody"></div>
+</div>
+
+<div class="modalBg" id="formBg" hidden>
+  <form class="modal" id="recForm">
+    <h2 id="formTitle">御朱印を記録</h2>
+    <div class="muted" id="formPlace" style="font-size:14px"></div>
+    <label>参拝日</label>
+    <input type="date" id="fDate" required>
+    <label>御朱印の写真（任意）</label>
+    <div class="photoPick">
+      <div id="fPreview"><div class="ph">📷</div></div>
+      <div>
+        <button type="button" class="btnSub" id="fPhotoBtn">写真を選ぶ／撮る</button>
+        <button type="button" class="btnSub" id="fPhotoClear" hidden style="margin-top:6px">写真を外す</button>
+        <input type="file" id="fPhoto" accept="image/*" hidden>
+      </div>
+    </div>
+    <label>メモ（初穂料・書き手・感想など）</label>
+    <textarea id="fMemo" placeholder="例: 初穂料500円。限定の秋御朱印。"></textarea>
+    <div class="actions">
+      <button type="button" class="btnSub" id="fCancel">キャンセル</button>
+      <button type="submit" class="btnMain" id="fSave">保存</button>
+    </div>
+  </form>
+</div>
+
+<div id="viewer" hidden><img id="viewerImg" alt="御朱印"></div>
+<div id="toast"></div>
+<input type="file" id="importFile" accept="application/json,.json" hidden>
+
+<script type="module">
+/**
+ * temple-api.js — 全国の寺社仏閣データ取得モジュール
+ *
+ * 使うのは無料・APIキー不要のAPIだけです。
+ *   - Overpass API (OpenStreetMap) … 神社・寺院の名称 / 緯度経度 / 住所タグ
+ *   - Nominatim (OpenStreetMap)    … 住所タグが無いときの逆ジオコーディング（任意・1秒1件まで）
+ *   - Wikipedia API (ja)           … 概要文
+ *   - Wikidata API                 … 宗派（P140: 宗教・宗派）
+ *
+ * ブラウザでも Node.js 18 以降でも動きます（標準の fetch を使用）。
+ *
+ * 主な関数
+ *   searchTemplesByPrefecture('京都府', { kind: 'buddhist', limit: 100 })
+ *   searchTemplesNearby(35.0116, 135.7681, { radius: 1000 })
+ *   fillMissingAddresses(places)   // 住所の無いものを Nominatim で補完
+ *   enrichPlaces(places)           // Wikipedia / Wikidata で概要文・宗派を補完
+ */
+
+// ─────────────────────────────────────────────
+// 設定
+// ─────────────────────────────────────────────
+const CONFIG = {
+  overpassEndpoints: [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+  ],
+  nominatimEndpoint: 'https://nominatim.openstreetmap.org/reverse',
+  wikipediaApi: 'https://ja.wikipedia.org/w/api.php',
+  wikidataApi: 'https://www.wikidata.org/w/api.php',
+  // Nominatim の利用規約: 1秒に1リクエストまで
+  nominatimIntervalMs: 1100,
+  // Node.js から使う場合は連絡先入りの User-Agent を設定してください（ブラウザでは無視されます）
+  userAgent: 'TempleSearchApp/0.1 (contact: you@example.com)',
+  requestTimeoutMs: 30000,
+  // 都道府県全体の検索は1分以上かかることがあるので Overpass だけ長めに待つ
+  overpassTimeoutMs: 150000,
+};
+
+const IS_BROWSER = typeof window !== 'undefined';
+
+// ─────────────────────────────────────────────
+// 都道府県（OSM の ISO3166-2 タグで検索する）
+// ─────────────────────────────────────────────
+const PREFECTURES = [
+  '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県',
+  '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県',
+  '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県',
+  '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県',
+  '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県',
+  '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県',
+  '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県',
+].map((name, i) => ({ name, code: `JP-${String(i + 1).padStart(2, '0')}` }));
+
+/** '京都府' / '京都' / 26 / 'JP-26' のどれでも都道府県を特定する */
+function resolvePrefecture(input) {
+  if (input == null) return null;
+  const s = String(input).trim();
+  if (/^JP-\d{2}$/i.test(s)) return PREFECTURES.find((p) => p.code === s.toUpperCase()) || null;
+  if (/^\d{1,2}$/.test(s)) return PREFECTURES[Number(s) - 1] || null;
+  return (
+    PREFECTURES.find((p) => p.name === s) ||
+    // 「京都」「東京」「北海道」のように末尾の都道府県を省いた入力にも対応
+    PREFECTURES.find((p) => p.name === s + '都' || p.name === s + '道' || p.name === s + '府' || p.name === s + '県') ||
+    null
+  );
+}
+
+// ─────────────────────────────────────────────
+// 共通ユーティリティ
+// ─────────────────────────────────────────────
+// 一部の環境（Claude アプリのプレビュー画面など）では fetch に AbortSignal を渡すと
+// "The object can not be cloned" エラーになる。その場合は signal なしで再実行し、
+// タイムアウトは Promise.race で代用する。
+let signalUnsupported = false;
+
+function isCloneError(e) {
+  return e && (e.name === 'DataCloneError' || /can ?not be cloned|could not be cloned/i.test(e.message || ''));
+}
+
+async function fetchJSON(url, init = {}) {
+  const timeoutMs = init.timeoutMs || CONFIG.requestTimeoutMs;
+  const host = new URL(url).host;
+  const headers = { Accept: 'application/json', ...(init.headers || {}) };
+  if (!IS_BROWSER && CONFIG.userAgent) headers['User-Agent'] = CONFIG.userAgent;
+  const base = { method: init.method || 'GET', headers };
+  if (init.body != null) base.body = init.body;
+
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`タイムアウト（${timeoutMs / 1000}秒）: ${host}`)), timeoutMs);
+  });
+
+  const doFetch = async (useSignal) => {
+    const opts = { ...base };
+    let ctrl;
+    if (useSignal) {
+      ctrl = new AbortController();
+      opts.signal = ctrl.signal;
+      if (init.signal) init.signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+      timeout.catch(() => ctrl.abort());
+    }
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status} ${res.statusText} (${host})`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
+  };
+
+  try {
+    if (!signalUnsupported) {
+      try {
+        return await Promise.race([doFetch(true), timeout]);
+      } catch (e) {
+        if (!isCloneError(e)) throw e;
+        signalUnsupported = true; // 以降は signal を使わない
+      }
+    }
+    return await Promise.race([doFetch(false), timeout]);
+  } catch (e) {
+    if (e.name === 'TypeError') throw new Error(`接続できません（${host}）: ${e.message}`);
+    if (isCloneError(e)) throw new Error(`この画面では通信できません（${host}）。Safari や Chrome で開いてください`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function qs(params) {
+  return new URLSearchParams(params).toString();
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 2点間の距離（メートル） */
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/** 同時実行数を制限して map する */
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** 名称比較用の正規化（空白・括弧書き・全角半角の揺れを除く） */
+function normalizeName(s) {
+  return String(s || '')
+    .normalize('NFKC')
+    .replace(/\s*[（(][^）)]*[）)]\s*/g, '') // 「八幡神社 (京都市)」→「八幡神社」
+    .replace(/[\s・･]/g, '')
+    .replace(/^宗教法人/, '')
+    .toLowerCase();
+}
+
+// ─────────────────────────────────────────────
+// 仕様1: Overpass API で神社・寺院を取得
+// ─────────────────────────────────────────────
+const RELIGION_REGEX = {
+  all: '^(shinto|buddhist)$',
+  shinto: '^shinto$',
+  buddhist: '^buddhist$',
+};
+
+/** Overpass QL を組み立てる */
+function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all', limit = 200 }) {
+  const religion = RELIGION_REGEX[kind] || RELIGION_REGEX.all;
+  const filter = `["amenity"="place_of_worship"]["religion"~"${religion}"]["name"]`;
+  if (prefectureCode) {
+    return [
+      '[out:json][timeout:120];',
+      `area["ISO3166-2"="${prefectureCode}"]["admin_level"="4"]->.pref;`,
+      `nwr${filter}(area.pref);`,
+      `out center tags ${limit};`,
+    ].join('\n');
+  }
+  if (around) {
+    const { lat, lon, radius } = around;
+    return [
+      '[out:json][timeout:60];',
+      `nwr${filter}(around:${radius},${lat},${lon});`,
+      `out center tags ${limit};`,
+    ].join('\n');
+  }
+  if (bbox) {
+    const f = (n) => Number(n).toFixed(6);
+    return [
+      '[out:json][timeout:90];',
+      `nwr${filter}(${f(bbox.south)},${f(bbox.west)},${f(bbox.north)},${f(bbox.east)});`,
+      `out center tags ${limit};`,
+    ].join('\n');
+  }
+  throw new Error('prefectureCode / around / bbox のどれかを指定してください');
+}
+
+/** Overpass に問い合わせる（混雑時は別サーバーに切り替え） */
+async function runOverpass(query, { signal } = {}) {
+  const errors = [];
+  for (const endpoint of CONFIG.overpassEndpoints) {
+    try {
+      const json = await fetchJSON(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        body: 'data=' + encodeURIComponent(query),
+        signal,
+        timeoutMs: CONFIG.overpassTimeoutMs,
+      });
+      if (json.remark && /runtime error|timed out/i.test(json.remark)) {
+        throw new Error('Overpass: ' + json.remark);
+      }
+      return json.elements || [];
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      errors.push(e.message);
+      // 429（混雑）/ 5xx / タイムアウトのときは次のサーバーへ
+    }
+  }
+  throw new Error('Overpass API の全サーバーで失敗しました\n- ' + errors.join('\n- '));
+}
+
+/** OSM の addr:* タグから日本式の住所文字列を作る */
+function addressFromTags(t = {}) {
+  if (t['addr:full']) return t['addr:full'];
+  const area = [
+    t['addr:province'] || t['addr:state'],
+    t['addr:county'],
+    t['addr:city'],
+    t['addr:suburb'],
+    t['addr:quarter'],
+    t['addr:neighbourhood'],
+    t['addr:street'],
+  ].filter(Boolean);
+  const nums = [t['addr:block_number'], t['addr:housenumber']].filter(Boolean).join('-');
+  // 都道府県だけ、のような粗い住所は「住所なし」として扱う
+  if (area.length < 2 && !nums) return null;
+  return dedupeJoin(area) + nums;
+}
+
+function dedupeJoin(parts) {
+  const out = [];
+  for (const p of parts) if (out[out.length - 1] !== p) out.push(p);
+  return out.join('');
+}
+
+// OSM の denomination タグ → 日本語の宗派名（Wikidata で取れないときの予備）
+const DENOMINATION_JA = {
+  jodo_shinshu: '浄土真宗', shin: '浄土真宗', jodo: '浄土宗', pure_land: '浄土宗',
+  shingon: '真言宗', tendai: '天台宗', nichiren: '日蓮宗', soto: '曹洞宗',
+  rinzai: '臨済宗', obaku: '黄檗宗', zen: '禅宗', ji: '時宗', kegon: '華厳宗',
+  hosso: '法相宗', ritsu: '律宗', yuzu_nembutsu: '融通念仏宗', shugendo: '修験道',
+  mahayana: '大乗仏教', jinja_honcho: '神社本庁',
+};
+
+/** Overpass の要素をアプリで扱いやすい形にそろえる */
+function normalizeElement(el, origin) {
+  const t = el.tags || {};
+  const lat = el.lat ?? el.center?.lat;
+  const lon = el.lon ?? el.center?.lon;
+  const place = {
+    id: `${el.type}/${el.id}`,
+    osmUrl: `https://www.openstreetmap.org/${el.type}/${el.id}`,
+    name: t['name:ja'] || t.name,
+    kana: t['name:ja-Hira'] || t['name:ja_kana'] || t['name:ja-Kana'] || null,
+    religion: t.religion, // 'shinto' | 'buddhist'
+    type: t.religion === 'shinto' ? '神社' : '寺院',
+    lat,
+    lon,
+    address: addressFromTags(t),
+    addressSource: null,
+    postcode: t['addr:postcode'] || null,
+    denomination: t.denomination
+      ? DENOMINATION_JA[t.denomination] || t.denomination
+      : null,
+    wikidata: t.wikidata || null,
+    wikipedia: t.wikipedia || null, // 例: "ja:清水寺"
+    website: t.website || t['contact:website'] || null,
+    distance: null,
+    wiki: null, // enrichPlace() で埋まる
+    tags: t,
+  };
+  if (place.address) place.addressSource = 'osm';
+  if (origin && lat != null) place.distance = Math.round(distanceMeters(origin.lat, origin.lon, lat, lon));
+  return place;
+}
+
+/**
+ * 都道府県内の神社・寺院を取得
+ * @param {string|number} prefecture '京都府' / '京都' / 26 / 'JP-26'
+ * @param {{kind?: 'all'|'shinto'|'buddhist', limit?: number, signal?: AbortSignal}} opts
+ */
+async function searchTemplesByPrefecture(prefecture, { kind = 'all', limit = 200, signal } = {}) {
+  const pref = resolvePrefecture(prefecture);
+  if (!pref) throw new Error(`都道府県が見つかりません: ${prefecture}`);
+  const query = buildOverpassQuery({ prefectureCode: pref.code, kind, limit });
+  const elements = await runOverpass(query, { signal });
+  return elements
+    .map((el) => normalizeElement(el))
+    .filter((p) => p.name && p.lat != null)
+    .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+}
+
+/**
+ * 緯度経度の周辺にある神社・寺院を取得（近い順）
+ * @param {number} lat
+ * @param {number} lon
+ * @param {{radius?: number, kind?: 'all'|'shinto'|'buddhist', limit?: number, signal?: AbortSignal}} opts radius はメートル
+ */
+async function searchTemplesNearby(lat, lon, { radius = 1000, kind = 'all', limit = 100, signal } = {}) {
+  lat = Number(lat);
+  lon = Number(lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('緯度・経度が正しくありません');
+  radius = Math.min(Math.max(Number(radius) || 1000, 50), 20000);
+  const query = buildOverpassQuery({ around: { lat, lon, radius }, kind, limit });
+  const elements = await runOverpass(query, { signal });
+  return elements
+    .map((el) => normalizeElement(el, { lat, lon }))
+    .filter((p) => p.name && p.lat != null)
+    .sort((a, b) => a.distance - b.distance);
+}
+
+/**
+ * 地図の表示範囲（南西〜北東）にある神社・寺院を取得（範囲の中心から近い順）
+ * @param {{south:number, west:number, north:number, east:number}} bbox
+ */
+async function searchTemplesInBounds(bbox, { kind = 'all', limit = 400, signal } = {}) {
+  const center = { lat: (bbox.south + bbox.north) / 2, lon: (bbox.west + bbox.east) / 2 };
+  const query = buildOverpassQuery({ bbox, kind, limit });
+  const elements = await runOverpass(query, { signal });
+  return elements
+    .map((el) => normalizeElement(el, center))
+    .filter((p) => p.name && p.lat != null)
+    .sort((a, b) => a.distance - b.distance);
+}
+
+// ─────────────────────────────────────────────
+// 住所の補完（Nominatim 逆ジオコーディング・1秒1件）
+// ─────────────────────────────────────────────
+const nominatimCache = new Map();
+let nominatimQueue = Promise.resolve();
+
+function addressFromNominatim(a = {}) {
+  const area = [
+    a.province || a.state,
+    a.county,
+    a.city || a.town || a.village,
+    a.city_district,
+    a.suburb,
+    a.quarter,
+    a.neighbourhood,
+    a.hamlet,
+  ].filter(Boolean);
+  if (!area.length) return null;
+  return dedupeJoin(area) + (a.house_number || '');
+}
+
+/** 緯度経度 → 住所（キャッシュ・間隔制御つき） */
+function reverseGeocode(lat, lon) {
+  const key = `${lat.toFixed(5)},${lon.toFixed(5)}`;
+  if (nominatimCache.has(key)) return nominatimCache.get(key);
+  const job = nominatimQueue.then(async () => {
+    const url =
+      CONFIG.nominatimEndpoint +
+      '?' +
+      qs({ format: 'jsonv2', lat, lon, zoom: 18, addressdetails: 1, 'accept-language': 'ja' });
+    try {
+      const json = await fetchJSON(url);
+      return addressFromNominatim(json.address);
+    } finally {
+      await sleep(CONFIG.nominatimIntervalMs);
+    }
+  });
+  nominatimQueue = job.catch(() => {});
+  nominatimCache.set(key, job);
+  return job;
+}
+
+/**
+ * address が空の施設だけ Nominatim で住所を補完する（元の配列を書き換えて返す）
+ * 1秒1件なので max 件までに制限している
+ */
+async function fillMissingAddresses(places, { max = 30, onProgress } = {}) {
+  const targets = places.filter((p) => !p.address).slice(0, max);
+  let done = 0;
+  for (const p of targets) {
+    try {
+      const addr = await reverseGeocode(p.lat, p.lon);
+      if (addr) {
+        p.address = addr;
+        p.addressSource = 'nominatim';
+      }
+    } catch (e) {
+      p.addressError = e.message;
+    }
+    onProgress?.(++done, targets.length, p);
+  }
+  return places;
+}
+
+// ─────────────────────────────────────────────
+// 仕様2: Wikipedia / Wikidata で概要文・宗派を補完
+// ─────────────────────────────────────────────
+const MATCH_RADIUS_M = 3000; // 名前が合っていても、この距離より離れていれば別の寺社とみなす
+const wikidataLabelCache = new Map();
+
+async function wikipediaQuery(params) {
+  return fetchJSON(CONFIG.wikipediaApi + '?' + qs({ action: 'query', format: 'json', formatversion: 2, origin: '*', ...params }));
+}
+
+async function wikidataQuery(params) {
+  return fetchJSON(CONFIG.wikidataApi + '?' + qs({ format: 'json', origin: '*', ...params }));
+}
+
+/** 名称が一致しているか（完全一致 / 片方がもう片方を含む） */
+function nameMatchLevel(placeName, pageTitle) {
+  const a = normalizeName(placeName);
+  const b = normalizeName(pageTitle);
+  if (!a || !b) return 0;
+  if (a === b) return 2;
+  if (a.length >= 3 && b.length >= 3 && (a.includes(b) || b.includes(a))) return 1;
+  return 0;
+}
+
+/** ① 座標の近くにある Wikipedia 記事から名前の合うものを探す（同名寺社の取り違えが起きにくい） */
+async function findByGeosearch(place) {
+  const json = await wikipediaQuery({
+    list: 'geosearch',
+    gscoord: `${place.lat}|${place.lon}`,
+    gsradius: 1000,
+    gslimit: 50,
+  });
+  const hits = (json.query?.geosearch || [])
+    .map((g) => ({ title: g.title, dist: g.dist, level: nameMatchLevel(place.name, g.title) }))
+    .filter((g) => g.level > 0)
+    .sort((x, y) => y.level - x.level || x.dist - y.dist);
+  return hits[0] ? { title: hits[0].title, matchedBy: 'geosearch', confidence: 'high', dist: Math.round(hits[0].dist) } : null;
+}
+
+/** ② 名前で全文検索し、記事の座標が近いものを採用する */
+async function findByTextSearch(place) {
+  const json = await wikipediaQuery({
+    generator: 'search',
+    gsrsearch: place.name,
+    gsrlimit: 10,
+    gsrnamespace: 0,
+    prop: 'coordinates',
+    colimit: 'max',
+  });
+  const pages = json.query?.pages || [];
+  let best = null;
+  for (const pg of pages) {
+    const level = nameMatchLevel(place.name, pg.title);
+    if (!level) continue;
+    const c = pg.coordinates?.[0];
+    if (c) {
+      const dist = distanceMeters(place.lat, place.lon, c.lat, c.lon);
+      if (dist > MATCH_RADIUS_M) continue; // 同名の別の寺社
+      const cand = { title: pg.title, matchedBy: 'search+coords', confidence: level === 2 ? 'high' : 'medium', dist: Math.round(dist), score: level * 10 - dist / 1000 };
+      if (!best || cand.score > best.score) best = cand;
+    } else if (level === 2 && !best) {
+      // 記事に座標が無い場合は名前の完全一致のみ・信頼度 low
+      best = { title: pg.title, matchedBy: 'search(name only)', confidence: 'low', dist: null, score: 0 };
+    }
+  }
+  if (best) delete best.score;
+  return best;
+}
+
+/** Wikipedia 記事の概要文と Wikidata ID を取得 */
+async function fetchWikipediaPage(title) {
+  const json = await wikipediaQuery({
+    titles: title,
+    redirects: 1,
+    prop: 'extracts|pageprops|info',
+    exintro: 1,
+    explaintext: 1,
+    ppprop: 'wikibase_item|disambiguation',
+    inprop: 'url',
+  });
+  const pg = json.query?.pages?.[0];
+  if (!pg || pg.missing) return null;
+  if (pg.pageprops && 'disambiguation' in pg.pageprops) return null; // 曖昧さ回避ページは使わない
+  return {
+    title: pg.title,
+    url: pg.fullurl || `https://ja.wikipedia.org/wiki/${encodeURIComponent(pg.title)}`,
+    summary: (pg.extract || '').trim() || null,
+    qid: pg.pageprops?.wikibase_item || null,
+  };
+}
+
+/** Wikidata の項目から日本語版 Wikipedia のタイトルと宗派(P140)を取得 */
+async function fetchWikidataInfo(qid) {
+  const json = await wikidataQuery({
+    action: 'wbgetentities',
+    ids: qid,
+    props: 'claims|sitelinks',
+    sitefilter: 'jawiki',
+  });
+  const ent = json.entities?.[qid];
+  if (!ent || ent.missing !== undefined) return null;
+  const sectIds = (ent.claims?.P140 || [])
+    .map((c) => c.mainsnak?.datavalue?.value?.id)
+    .filter(Boolean);
+  return {
+    jawikiTitle: ent.sitelinks?.jawiki?.title || null,
+    sect: await getWikidataLabels(sectIds),
+  };
+}
+
+/** Wikidata の Q番号 → 日本語ラベル（無ければ英語） */
+async function getWikidataLabels(ids) {
+  const need = ids.filter((id) => !wikidataLabelCache.has(id));
+  if (need.length) {
+    const json = await wikidataQuery({ action: 'wbgetentities', ids: need.slice(0, 50).join('|'), props: 'labels', languages: 'ja|en' });
+    for (const id of need) {
+      const l = json.entities?.[id]?.labels;
+      wikidataLabelCache.set(id, l?.ja?.value || l?.en?.value || id);
+    }
+  }
+  return ids.map((id) => wikidataLabelCache.get(id));
+}
+
+/**
+ * 1件の寺社に Wikipedia / Wikidata の情報を補完する
+ * 結果は place.wiki に入る:
+ *   { title, url, summary, qid, sect: string[], matchedBy, confidence, dist } または { notFound: true }
+ */
+async function enrichPlace(place) {
+  let title = null;
+  let qid = place.wikidata;
+  let match = null;
+
+  // 1) OSM に wikipedia / wikidata タグがあればそれを最優先（確実）
+  if (place.wikipedia) {
+    const m = place.wikipedia.match(/^ja:(.+)$/);
+    if (m) {
+      title = m[1];
+      match = { matchedBy: 'osm:wikipedia', confidence: 'high' };
+    }
+  }
+  let wd = null;
+  if (!title && qid) {
+    wd = await fetchWikidataInfo(qid);
+    if (wd?.jawikiTitle) {
+      title = wd.jawikiTitle;
+      match = { matchedBy: 'osm:wikidata', confidence: 'high' };
+    }
+  }
+
+  // 2) タグが無ければ、座標検索 → 名前検索 の順で探す
+  if (!title && !qid) {
+    match = (await findByGeosearch(place)) || (await findByTextSearch(place));
+    title = match?.title || null;
+  }
+
+  let page = null;
+  if (title) {
+    page = await fetchWikipediaPage(title);
+    if (page?.qid && !qid) qid = page.qid;
+  }
+  if (qid && !wd) wd = await fetchWikidataInfo(qid);
+
+  if (!page && !wd) {
+    place.wiki = { notFound: true };
+    return place;
+  }
+
+  let sect = wd?.sect || [];
+  // 神社の P140 は「神道」だけのことが多い。OSM の宗派タグがあれば補う
+  if (place.denomination && !sect.includes(place.denomination)) sect = [...sect, place.denomination];
+
+  place.wiki = {
+    title: page?.title || null,
+    url: page?.url || null,
+    summary: page?.summary || null,
+    qid: qid || null,
+    wikidataUrl: qid ? `https://www.wikidata.org/wiki/${qid}` : null,
+    sect,
+    matchedBy: match?.matchedBy || 'osm:wikidata',
+    confidence: match?.confidence || 'high',
+    dist: match?.dist ?? null,
+  };
+  return place;
+}
+
+/** 複数件をまとめて補完（同時3件まで） */
+async function enrichPlaces(places, { concurrency = 3, onProgress } = {}) {
+  let done = 0;
+  await mapLimit(places, concurrency, async (p) => {
+    try {
+      await enrichPlace(p);
+    } catch (e) {
+      p.wiki = { error: e.message };
+    }
+    onProgress?.(++done, places.length, p);
+  });
+  return places;
+}
+
+
+// ═════════════════════════════════════════════
+//  御朱印の保存（ブラウザ内の IndexedDB）
+// ═════════════════════════════════════════════
+const DB_NAME = 'goshuin-map';
+let dbPromise;
+function openDB() {
+  return (dbPromise ||= new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const st = req.result.createObjectStore('records', { keyPath: 'id' });
+      st.createIndex('placeId', 'placeId');
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }));
+}
+const reqP = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+async function store(mode) { return (await openDB()).transaction('records', mode).objectStore('records'); }
+const dbAll = async () => reqP((await store('readonly')).getAll());
+const dbDelete = async (id) => reqP((await store('readwrite')).delete(id));
+async function dbPut(rec) {
+  try {
+    return await reqP((await store('readwrite')).put(rec));
+  } catch (e) {
+    // 古い Safari などで Blob を保存できない場合は文字列(dataURL)にして保存
+    if (rec.photo instanceof Blob) return reqP((await store('readwrite')).put({ ...rec, photo: await blobToDataURL(rec.photo) }));
+    throw e;
+  }
+}
+function blobToDataURL(blob) {
+  return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); });
+}
+function dataURLToBlob(url) {
+  const [head, b64] = url.split(',');
+  const mime = (head.match(/data:([^;]+)/) || [])[1] || 'image/jpeg';
+  const bin = atob(b64); const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+/** 写真を長辺 1600px の JPEG に縮小（保存容量の節約） */
+function resizeImage(file, max = 1600, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error('画像の変換に失敗しました'))), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('画像を読み込めませんでした')); };
+    img.src = url;
+  });
+}
+const photoURLCache = new Map();
+function photoSrc(rec) {
+  if (!rec.photo) return null;
+  if (typeof rec.photo === 'string') return rec.photo;
+  if (!photoURLCache.has(rec.id)) photoURLCache.set(rec.id, URL.createObjectURL(rec.photo));
+  return photoURLCache.get(rec.id);
+}
+function dropPhotoURL(id) { const u = photoURLCache.get(id); if (u) { URL.revokeObjectURL(u); photoURLCache.delete(id); } }
+
+// ═════════════════════════════════════════════
+//  状態
+// ═════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const S = {
+  places: new Map(),   // id → place
+  markers: new Map(),  // id → L.marker
+  records: [],         // 御朱印の記録
+  kind: 'all',
+  q: '',
+  current: null,       // 詳細表示中の place id
+  searching: false,
+  editing: null,       // 編集中の記録
+  formPhoto: undefined // フォームで選んだ写真（undefined=変更なし / null=削除 / Blob=新規）
+};
+const AREA_LIMIT = 400;
+const LS_VIEW = 'goshuin-map:view';
+
+function today() {
+  const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+function fmtDate(s) { if (!s) return ''; const [y, m, d] = s.split('-'); return `${y}年${Number(m)}月${Number(d)}日`; }
+function fmtDist(m) { return m == null ? '' : m < 1000 ? `${m}m` : `${(m / 1000).toFixed(1)}km`; }
+let toastTimer;
+function toast(msg, isErr = false, ms = 3200) {
+  const t = $('toast'); t.textContent = msg; t.classList.toggle('err', isErr); t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+}
+const recordsFor = (placeId) => S.records.filter((r) => r.placeId === placeId).sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt.localeCompare(a.createdAt));
+
+// ═════════════════════════════════════════════
+//  地図
+// ═════════════════════════════════════════════
+let savedView = null;
+try { savedView = JSON.parse(localStorage.getItem(LS_VIEW)); } catch {}
+const map = L.map('map', { zoomControl: false, attributionControl: true })
+  .setView(savedView ? [savedView.lat, savedView.lng] : [34.9949, 135.785], savedView?.z || 15);
+const gsi = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', {
+  maxZoom: 18, attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">国土地理院</a>',
+});
+const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+});
+gsi.addTo(map);
+L.control.layers({ '地理院 淡色地図': gsi, 'OpenStreetMap': osm }, null, { position: 'bottomleft' }).addTo(map);
+map.attributionControl.addAttribution('寺社データ &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OSM</a> / Wikipedia');
+const markerLayer = L.layerGroup().addTo(map);
+let hereMarker = null;
+
+map.on('moveend', () => {
+  const c = map.getCenter();
+  try { localStorage.setItem(LS_VIEW, JSON.stringify({ lat: c.lat, lng: c.lng, z: map.getZoom() })); } catch {}
+});
+map.on('click', () => closeSheet());
+
+function iconFor(p) {
+  const n = recordsFor(p.id).length;
+  return L.divIcon({
+    className: 'pin',
+    html: `<div class="pin-in ${p.religion === 'shinto' ? 'shinto' : 'buddhist'}${n ? ' visited' : ''}">${p.religion === 'shinto' ? '⛩' : '卍'}${n ? `<b>${n}</b>` : ''}</div>`,
+    iconSize: [30, 30], iconAnchor: [15, 15],
+  });
+}
+function matches(p) {
+  const n = recordsFor(p.id).length;
+  if (S.kind === 'shinto' && p.religion !== 'shinto') return false;
+  if (S.kind === 'buddhist' && p.religion !== 'buddhist') return false;
+  if (S.kind === 'visited' && !n) return false;
+  if (S.kind === 'notyet' && n) return false;
+  if (S.q && !normalizeName(p.name).includes(normalizeName(S.q))) return false;
+  return true;
+}
+function renderMarkers() {
+  for (const p of S.places.values()) {
+    let m = S.markers.get(p.id);
+    if (matches(p)) {
+      if (!m) {
+        m = L.marker([p.lat, p.lon], { icon: iconFor(p), title: p.name, keyboard: false });
+        m.on('click', (e) => { L.DomEvent.stopPropagation(e); openDetail(p.id); });
+        S.markers.set(p.id, m);
+      } else m.setIcon(iconFor(p));
+      if (!markerLayer.hasLayer(m)) markerLayer.addLayer(m);
+    } else if (m && markerLayer.hasLayer(m)) markerLayer.removeLayer(m);
+  }
+  const visitedPlaces = new Set(S.records.map((r) => r.placeId)).size;
+  $('bookCnt').hidden = !visitedPlaces; $('bookCnt').textContent = visitedPlaces;
+}
+function refreshMarker(id) { const m = S.markers.get(id); const p = S.places.get(id); if (m && p) m.setIcon(iconFor(p)); renderMarkers(); }
+
+/** 記録だけ残っている寺社（まだ検索していない場所）も地図に出すための最小データ */
+function placeFromRecord(r) {
+  return { id: r.placeId, name: r.placeName, religion: r.religion, type: r.type, lat: r.lat, lon: r.lon, address: r.address || null,
+    addressSource: r.address ? 'record' : null, osmUrl: `https://www.openstreetmap.org/${r.placeId}`, wikipedia: null, wikidata: null,
+    denomination: null, distance: null, wiki: null, kana: null, _fromRecord: true };
+}
+function addPlaces(list) {
+  for (const p of list) {
+    const old = S.places.get(p.id);
+    if (!old) S.places.set(p.id, p);
+    else if (old._fromRecord) { p.wiki = old.wiki; S.places.set(p.id, p); }
+  }
+}
+
+// ═════════════════════════════════════════════
+//  エリア検索
+// ═════════════════════════════════════════════
+async function searchArea({ quiet = false } = {}) {
+  if (S.searching) return;
+  if (map.getZoom() < 12) { toast('範囲が広すぎます。もう少し拡大してから検索してください'); return; }
+  const b = map.getBounds();
+  S.searching = true;
+  const btn = $('areaBtn'); btn.disabled = true;
+  const t0 = Date.now();
+  const tick = setInterval(() => { btn.textContent = `⏳ 検索中… ${Math.round((Date.now() - t0) / 1000)}秒`; }, 500);
+  btn.textContent = '⏳ 検索中…';
+  try {
+    const list = await searchTemplesInBounds({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }, { limit: AREA_LIMIT });
+    addPlaces(list);
+    renderMarkers();
+    if (!quiet || !list.length) {
+      toast(list.length
+        ? `${list.length}件の寺社が見つかりました${list.length >= AREA_LIMIT ? `\n（上限${AREA_LIMIT}件。拡大して再検索すると漏れなく表示されます）` : ''}`
+        : 'この範囲には寺社が見つかりませんでした');
+    }
+  } catch (e) {
+    toast('検索に失敗しました。少し待ってからもう一度お試しください。\n' + e.message.split('\n')[0], true, 6000);
+  } finally {
+    clearInterval(tick); S.searching = false; btn.disabled = false; btn.textContent = '🔍 このエリアを検索';
+  }
+}
+
+// ═════════════════════════════════════════════
+//  詳細シート
+// ═════════════════════════════════════════════
+function openDetail(id, { pan = true } = {}) {
+  const p = S.places.get(id); if (!p) return;
+  S.current = id;
+  renderSheet();
+  $('sheet').classList.add('open');
+  $('sheet').scrollTop = 0;
+  if (pan) {
+    // ピンがシートに隠れないよう、画面の上の方に寄せる
+    setTimeout(() => {
+      const pt = map.latLngToContainerPoint([p.lat, p.lon]);
+      const wide = window.innerWidth >= 760;
+      const target = wide ? { x: window.innerWidth * 0.62, y: window.innerHeight * 0.5 } : { x: window.innerWidth / 2, y: window.innerHeight * 0.24 };
+      map.panBy([pt.x - target.x, pt.y - target.y], { animate: true });
+    }, 50);
+  }
+  loadExtras(p);
+}
+function closeSheet() { $('sheet').classList.remove('open'); S.current = null; }
+
+/** 住所と Wikipedia 情報を、開いたときに必要な分だけ取りに行く */
+async function loadExtras(p) {
+  const jobs = [];
+  if (!p.wiki && !p._wikiLoading) {
+    p._wikiLoading = true;
+    jobs.push(enrichPlace(p).catch((e) => { p.wiki = { error: e.message }; }).finally(() => { p._wikiLoading = false; }));
+  }
+  if (!p.address && !p._addrLoading && !p._addrTried) {
+    p._addrLoading = true;
+    jobs.push(reverseGeocode(p.lat, p.lon).then((a) => { if (a) { p.address = a; p.addressSource = 'nominatim'; } })
+      .catch(() => {}).finally(() => { p._addrLoading = false; p._addrTried = true; }));
+  }
+  for (const j of jobs) j.then(() => { if (S.current === p.id) renderSheet(); });
+}
+
+function renderSheet() {
+  const p = S.places.get(S.current); if (!p) return;
+  const w = p.wiki;
+  const recs = recordsFor(p.id);
+  const sect = w?.sect?.length ? w.sect.join('、') : p.denomination;
+
+  let wikiHtml = '';
+  if (!w) wikiHtml = `<p class="muted" style="font-size:13px">Wikipedia を確認中…</p>`;
+  else if (w.error) wikiHtml = `<p class="muted" style="font-size:13px">Wikipedia情報を取得できませんでした <button class="btnSub" data-act="retryWiki" style="padding:4px 8px;font-size:12px">再試行</button></p>`;
+  else if (w.notFound) wikiHtml = `<p class="muted" style="font-size:13px">Wikipedia に該当する記事は見つかりませんでした</p>`;
+  else if (w.summary) {
+    wikiHtml = `<div class="summary clamp" data-act="expand">${esc(w.summary)}</div>
+      <div class="note">出典: <a href="${esc(w.url)}" target="_blank" rel="noopener">Wikipedia「${esc(w.title)}」</a>
+      ${w.confidence !== 'high' ? '・自動で照合したため、別の寺社の記事の可能性があります' : ''}</div>`;
+  } else if (w.title) wikiHtml = `<div class="note">出典: <a href="${esc(w.url)}" target="_blank" rel="noopener">Wikipedia「${esc(w.title)}」</a></div>`;
+
+  const recHtml = recs.length
+    ? recs.map(recCard).join('')
+    : `<p class="muted" style="font-size:13px;margin:4px 0 10px">まだ記録がありません</p>`;
+
+  $('sheetBody').innerHTML = `
+    <div class="sheetHead">
+      <h2><span class="badge ${p.religion === 'shinto' ? 'shinto' : 'buddhist'}">${esc(p.type)}</span>${esc(p.name)}</h2>
+      <button class="x" data-act="close" aria-label="閉じる">✕</button>
+    </div>
+    ${p.kana ? `<div class="muted" style="font-size:12px">${esc(p.kana)}</div>` : ''}
+    <dl class="kv">
+      <div><dt>住所</dt><dd>${p.address ? esc(p.address) : p._addrLoading ? '<span class="muted">取得中…</span>' : '<span class="muted">不明</span>'}</dd></div>
+      <div><dt>宗派</dt><dd>${sect ? esc(sect) : !w ? '<span class="muted">確認中…</span>' : '<span class="muted">不明</span>'}</dd></div>
+    </dl>
+    ${wikiHtml}
+    <div class="linkRow">
+      <a href="https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}" target="_blank" rel="noopener">🗺 Googleマップ</a>
+      <a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}" target="_blank" rel="noopener">🚶 経路</a>
+      ${p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">🔗 公式サイト</a>` : ''}
+      <a href="${esc(p.osmUrl)}" target="_blank" rel="noopener">OSM</a>
+    </div>
+    <h3 class="sec">🔴 御朱印の記録 ${recs.length ? `<span class="muted" style="font-weight:400;font-size:13px">${recs.length}件</span>` : ''}</h3>
+    ${recHtml}
+    <button class="btnMain" data-act="addRec">＋ 御朱印を記録する</button>
+  `;
+}
+
+function recCard(r, { showPlace = false } = {}) {
+  const src = photoSrc(r);
+  return `<div class="rec">
+    ${src ? `<img class="thumb" src="${esc(src)}" data-act="view" data-id="${esc(r.id)}" alt="御朱印">` : `<div class="thumb">🔴</div>`}
+    <div class="body">
+      ${showPlace ? `<div style="font-weight:700"><span class="badge ${r.religion === 'shinto' ? 'shinto' : 'buddhist'}">${esc(r.type)}</span>${esc(r.placeName)}</div>` : ''}
+      <div class="date">${esc(fmtDate(r.date))}</div>
+      ${r.memo ? `<div class="memo">${esc(r.memo)}</div>` : ''}
+      <div class="ops">
+        ${showPlace ? `<button data-act="goto" data-id="${esc(r.id)}">地図で見る</button>` : ''}
+        <button data-act="editRec" data-id="${esc(r.id)}">編集</button>
+        <button data-act="delRec" data-id="${esc(r.id)}">削除</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// シート・パネル内のボタン操作（まとめて受け付ける）
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const act = el.dataset.act; const id = el.dataset.id;
+  if (act === 'close') closeSheet();
+  else if (act === 'expand') el.classList.toggle('clamp');
+  else if (act === 'retryWiki') { const p = S.places.get(S.current); p.wiki = null; renderSheet(); loadExtras(p); }
+  else if (act === 'addRec') openForm(null);
+  else if (act === 'editRec') openForm(S.records.find((r) => r.id === id));
+  else if (act === 'delRec') deleteRecord(id, el);
+  else if (act === 'view') { $('viewerImg').src = photoSrc(S.records.find((r) => r.id === id)); $('viewer').hidden = false; }
+  else if (act === 'goto') { const r = S.records.find((x) => x.id === id); $('bookPanel').hidden = true; flyToPlace(r.placeId); }
+  else if (act === 'openPlace') { $('listPanel').hidden = true; flyToPlace(id); }
+  else if (act === 'export') exportBackup();
+  else if (act === 'import') $('importFile').click();
+});
+$('viewer').onclick = () => { $('viewer').hidden = true; };
+document.querySelectorAll('[data-close]').forEach((b) => { b.onclick = () => { $(b.dataset.close).hidden = true; }; });
+
+function flyToPlace(placeId) {
+  const p = S.places.get(placeId); if (!p) return;
+  if (!matches(p)) { S.kind = 'all'; S.q = ''; $('q').value = ''; syncChips(); renderMarkers(); }
+  map.setView([p.lat, p.lon], Math.max(map.getZoom(), 16), { animate: false });
+  openDetail(placeId);
+}
+
+// ═════════════════════════════════════════════
+//  御朱印の記録フォーム
+// ═════════════════════════════════════════════
+function openForm(rec) {
+  const p = rec ? S.places.get(rec.placeId) || placeFromRecord(rec) : S.places.get(S.current);
+  if (!p) return;
+  S.editing = rec || null;
+  S.formPlace = p;
+  S.formPhoto = undefined;
+  $('formTitle').textContent = rec ? '記録を編集' : '御朱印を記録';
+  $('formPlace').textContent = `${p.type}：${p.name}`;
+  $('fDate').value = rec?.date || today();
+  $('fMemo').value = rec?.memo || '';
+  $('fPhoto').value = '';
+  setPreview(rec ? photoSrc(rec) : null);
+  $('formBg').hidden = false;
+}
+function setPreview(src) {
+  $('fPreview').innerHTML = src ? `<img src="${esc(src)}" alt="">` : '<div class="ph">📷</div>';
+  $('fPhotoClear').hidden = !src;
+}
+$('fPhotoBtn').onclick = () => $('fPhoto').click();
+$('fPhoto').onchange = async () => {
+  const f = $('fPhoto').files[0]; if (!f) return;
+  try {
+    $('fSave').disabled = true; $('fSave').textContent = '写真を準備中…';
+    S.formPhoto = await resizeImage(f);
+    setPreview(URL.createObjectURL(S.formPhoto));
+  } catch (e) { toast(e.message, true); }
+  finally { $('fSave').disabled = false; $('fSave').textContent = '保存'; }
+};
+$('fPhotoClear').onclick = () => { S.formPhoto = null; $('fPhoto').value = ''; setPreview(null); };
+$('fCancel').onclick = () => { $('formBg').hidden = true; };
+$('formBg').addEventListener('click', (e) => { if (e.target === $('formBg')) $('formBg').hidden = true; });
+
+$('recForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const p = S.formPlace; const old = S.editing;
+  const rec = {
+    id: old?.id || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+    placeId: p.id, placeName: p.name, religion: p.religion, type: p.type, lat: p.lat, lon: p.lon, address: p.address || old?.address || null,
+    date: $('fDate').value || today(),
+    memo: $('fMemo').value.trim(),
+    photo: S.formPhoto === undefined ? (old?.photo || null) : S.formPhoto,
+    createdAt: old?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    $('fSave').disabled = true;
+    await dbPut(rec);
+    if (old) { dropPhotoURL(old.id); S.records = S.records.map((r) => (r.id === old.id ? rec : r)); }
+    else S.records.push(rec);
+    $('formBg').hidden = true;
+    // 端末の空き容量が少ないときにブラウザが勝手に消さないようお願いする
+    navigator.storage?.persist?.().catch(() => {});
+    refreshMarker(p.id);
+    if (S.current === p.id) renderSheet();
+    if (!$('bookPanel').hidden) renderBook();
+    toast(old ? '記録を更新しました' : `${p.name} の御朱印を記録しました 🔴`);
+  } catch (err) {
+    toast('保存に失敗しました: ' + err.message, true, 6000);
+  } finally { $('fSave').disabled = false; }
+};
+
+async function deleteRecord(id, btn) {
+  // confirm() が使えない環境もあるので、ボタンを2回押す方式で確認する
+  if (btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.textContent = 'もう一度押すと削除'; btn.style.color = '#c00'; setTimeout(() => { if (btn.isConnected) { btn.dataset.armed = ''; btn.textContent = '削除'; btn.style.color = ''; } }, 4000); return; }
+  const rec = S.records.find((r) => r.id === id); if (!rec) return;
+  await dbDelete(id);
+  dropPhotoURL(id);
+  S.records = S.records.filter((r) => r.id !== id);
+  refreshMarker(rec.placeId);
+  if (S.current) renderSheet();
+  if (!$('bookPanel').hidden) renderBook();
+  toast('記録を削除しました');
+}
+
+// ═════════════════════════════════════════════
+//  御朱印帳（一覧・統計・バックアップ）
+// ═════════════════════════════════════════════
+function renderBook() {
+  const recs = [...S.records].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt.localeCompare(a.createdAt));
+  const placeIds = new Set(recs.map((r) => r.placeId));
+  const shrines = new Set(recs.filter((r) => r.religion === 'shinto').map((r) => r.placeId)).size;
+  const temples = placeIds.size - shrines;
+  let html = `<div class="stats">
+    <div class="stat"><b>${recs.length}</b><span>御朱印</span></div>
+    <div class="stat"><b>${shrines}</b><span>神社</span></div>
+    <div class="stat"><b>${temples}</b><span>寺院</span></div>
+  </div>`;
+  if (!recs.length) {
+    html += `<div class="empty">まだ御朱印の記録がありません。<br>地図のピンをタップして<br>「＋ 御朱印を記録する」から追加できます。</div>`;
+  } else {
+    let lastYear = '';
+    for (const r of recs) {
+      const y = (r.date || '').slice(0, 4);
+      if (y !== lastYear) { html += `<h3 class="sec" style="border:none;padding-top:0;margin-top:14px">${esc(y)}年</h3>`; lastYear = y; }
+      html += recCard(r, { showPlace: true });
+    }
+  }
+  html += `<div class="backup">
+    <b>💾 バックアップ</b><br>
+    記録はこの端末のブラウザ内だけに保存されています。機種変更やブラウザのデータ削除に備えて、ときどきバックアップを保存してください（写真も含まれます）。
+    <div class="row">
+      <button class="btnSub" data-act="export">バックアップを保存</button>
+      <button class="btnSub" data-act="import">バックアップから復元</button>
+    </div>
+  </div>`;
+  $('bookBody').innerHTML = html;
+}
+$('btnBook').onclick = () => { renderBook(); $('bookPanel').hidden = false; closeSheet(); };
+
+async function exportBackup() {
+  if (!S.records.length) { toast('まだ記録がありません'); return; }
+  const records = await Promise.all(S.records.map(async (r) => ({
+    ...r, photo: r.photo ? (typeof r.photo === 'string' ? r.photo : await blobToDataURL(r.photo)) : null,
+  })));
+  const name = `goshuin-backup-${today()}.json`;
+  const blob = new Blob([JSON.stringify({ app: 'goshuin-map', version: 1, exportedAt: new Date().toISOString(), records })], { type: 'application/json' });
+  // iPhone/iPad は共有シート（「ファイルに保存」など）を優先
+  try {
+    const file = new File([blob], name, { type: 'application/json' });
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  toast('バックアップを保存しました');
+}
+$('importFile').onchange = async () => {
+  const f = $('importFile').files[0]; $('importFile').value = ''; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (data.app !== 'goshuin-map' || !Array.isArray(data.records)) throw new Error('御朱印マップのバックアップファイルではありません');
+    let added = 0, updated = 0;
+    for (const raw of data.records) {
+      if (!raw.id || !raw.placeId) continue;
+      const rec = { ...raw, photo: typeof raw.photo === 'string' && raw.photo.startsWith('data:') ? dataURLToBlob(raw.photo) : null };
+      await dbPut(rec);
+      const i = S.records.findIndex((r) => r.id === rec.id);
+      if (i >= 0) { dropPhotoURL(rec.id); S.records[i] = rec; updated++; } else { S.records.push(rec); added++; }
+      if (!S.places.has(rec.placeId)) S.places.set(rec.placeId, placeFromRecord(rec));
+    }
+    renderMarkers(); renderBook();
+    toast(`復元しました（追加 ${added}件・更新 ${updated}件）`);
+  } catch (e) { toast('復元できませんでした: ' + e.message, true, 6000); }
+};
+
+// ═════════════════════════════════════════════
+//  一覧（表示範囲の寺社を近い順に）
+// ═════════════════════════════════════════════
+$('btnList').onclick = () => {
+  const b = map.getBounds(); const c = map.getCenter();
+  const list = [...S.places.values()]
+    .filter((p) => matches(p) && b.contains([p.lat, p.lon]))
+    .map((p) => ({ p, d: Math.round(distanceMeters(c.lat, c.lng, p.lat, p.lon)) }))
+    .sort((a, b) => a.d - b.d);
+  $('listTitle').textContent = `表示中の寺社（${list.length}件）`;
+  $('listBody').innerHTML = list.length
+    ? list.map(({ p, d }) => {
+        const n = recordsFor(p.id).length;
+        return `<button class="item" data-act="openPlace" data-id="${esc(p.id)}">
+          <span class="badge ${p.religion === 'shinto' ? 'shinto' : 'buddhist'}">${esc(p.type)}</span>
+          <span class="nm">${esc(p.name)}${p.address ? `<small>${esc(p.address)}</small>` : ''}</span>
+          ${n ? `<span title="御朱印">🔴${n > 1 ? n : ''}</span>` : ''}
+          <span class="dist">${fmtDist(d)}</span>
+        </button>`;
+      }).join('')
+    : `<div class="empty">表示範囲に寺社がありません。<br>「🔍 このエリアを検索」を押してください。</div>`;
+  $('listPanel').hidden = false; closeSheet();
+};
+
+// ═════════════════════════════════════════════
+//  絞り込み・現在地
+// ═════════════════════════════════════════════
+function syncChips() { document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c.dataset.kind === S.kind)); }
+$('chips').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; S.kind = c.dataset.kind; syncChips(); renderMarkers(); };
+$('q').oninput = () => { S.q = $('q').value.trim(); renderMarkers(); };
+$('q').onkeydown = (e) => { if (e.key === 'Enter') $('q').blur(); };
+$('areaBtn').onclick = () => searchArea();
+$('btnLocate').onclick = () => {
+  if (!navigator.geolocation) { toast('この環境では現在地が使えません', true); return; }
+  toast('現在地を取得中…');
+  navigator.geolocation.getCurrentPosition((pos) => {
+    const ll = [pos.coords.latitude, pos.coords.longitude];
+    if (hereMarker) hereMarker.setLatLng(ll);
+    else hereMarker = L.marker(ll, { icon: L.divIcon({ className: 'pin', html: '<div class="here-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }), interactive: false }).addTo(map);
+    map.setView(ll, 15, { animate: false });
+    searchArea();
+  }, (err) => toast('現在地を取得できませんでした（' + err.message + '）', true), { enableHighAccuracy: true, timeout: 15000 });
+};
+
+// ═════════════════════════════════════════════
+//  起動
+// ═════════════════════════════════════════════
+(async () => {
+  try {
+    S.records = await dbAll();
+    for (const r of S.records) if (!S.places.has(r.placeId)) S.places.set(r.placeId, placeFromRecord(r));
+  } catch (e) {
+    toast('記録を読み込めませんでした（プライベートブラウズでは保存できません）', true, 6000);
+  }
+  renderMarkers();
+  searchArea({ quiet: true });
+})();
+</script>
+</body>
+</html>

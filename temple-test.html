@@ -283,7 +283,7 @@ const RELIGION_REGEX = {
 };
 
 /** Overpass QL を組み立てる */
-function buildOverpassQuery({ prefectureCode, around, kind = 'all', limit = 200 }) {
+function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all', limit = 200 }) {
   const religion = RELIGION_REGEX[kind] || RELIGION_REGEX.all;
   const filter = `["amenity"="place_of_worship"]["religion"~"${religion}"]["name"]`;
   if (prefectureCode) {
@@ -302,7 +302,15 @@ function buildOverpassQuery({ prefectureCode, around, kind = 'all', limit = 200 
       `out center tags ${limit};`,
     ].join('\n');
   }
-  throw new Error('prefectureCode か around のどちらかを指定してください');
+  if (bbox) {
+    const f = (n) => Number(n).toFixed(6);
+    return [
+      '[out:json][timeout:90];',
+      `nwr${filter}(${f(bbox.south)},${f(bbox.west)},${f(bbox.north)},${f(bbox.east)});`,
+      `out center tags ${limit};`,
+    ].join('\n');
+  }
+  throw new Error('prefectureCode / around / bbox のどれかを指定してください');
 }
 
 /** Overpass に問い合わせる（混雑時は別サーバーに切り替え） */
@@ -426,6 +434,20 @@ async function searchTemplesNearby(lat, lon, { radius = 1000, kind = 'all', limi
   const elements = await runOverpass(query, { signal });
   return elements
     .map((el) => normalizeElement(el, { lat, lon }))
+    .filter((p) => p.name && p.lat != null)
+    .sort((a, b) => a.distance - b.distance);
+}
+
+/**
+ * 地図の表示範囲（南西〜北東）にある神社・寺院を取得（範囲の中心から近い順）
+ * @param {{south:number, west:number, north:number, east:number}} bbox
+ */
+async function searchTemplesInBounds(bbox, { kind = 'all', limit = 400, signal } = {}) {
+  const center = { lat: (bbox.south + bbox.north) / 2, lon: (bbox.west + bbox.east) / 2 };
+  const query = buildOverpassQuery({ bbox, kind, limit });
+  const elements = await runOverpass(query, { signal });
+  return elements
+    .map((el) => normalizeElement(el, center))
     .filter((p) => p.name && p.lat != null)
     .sort((a, b) => a.distance - b.distance);
 }
