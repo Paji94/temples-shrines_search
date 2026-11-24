@@ -26,12 +26,28 @@
   [hidden] { display: none !important; }
 
   /* ── 上部バー ── */
-  #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; padding: calc(var(--safe-top) + 8px) 10px 8px;
+  #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 1150; padding: calc(var(--safe-top) + 8px) 10px 8px;
     background: linear-gradient(to bottom, rgba(250,247,241,.97) 70%, rgba(250,247,241,0)); pointer-events: none; }
   #topbar > * { pointer-events: auto; }
   .titleRow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
   .titleRow h1 { font-size: 16px; margin: 0; color: var(--shu-dark); letter-spacing: .05em; white-space: nowrap; }
-  #q { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); font-size: 16px; background: #fff; }
+  .searchBox { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; }
+  .searchBox .ico { position: absolute; left: 11px; font-size: 15px; pointer-events: none; opacity: .65; }
+  #q { width: 100%; padding: 9px 36px 9px 34px; border-radius: 999px; border: 1.5px solid var(--shu); font-size: 16px; background: #fff;
+    box-shadow: 0 1px 4px rgba(168,64,47,.15); -webkit-appearance: none; appearance: none; }
+  #q:focus { outline: none; box-shadow: 0 0 0 3px rgba(168,64,47,.2); }
+  #q::-webkit-search-cancel-button { display: none; }
+  #qClear { position: absolute; right: 6px; width: 26px; height: 26px; border-radius: 50%; border: none; background: #e9e2d6; font-size: 13px; color: var(--sumi); }
+  #suggest { position: absolute; left: 0; right: 0; top: calc(100% + 6px); background: #fff; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.2);
+    max-height: 60vh; overflow-y: auto; z-index: 5; font-size: 14px; }
+  #suggest .sg-h { font-size: 11px; color: var(--muted); padding: 8px 12px 4px; background: #faf7f1; }
+  #suggest button { display: flex; width: 100%; gap: 8px; align-items: center; text-align: left; padding: 10px 12px; border: none; border-top: 1px solid #f1ece2; background: #fff; }
+  #suggest button:active { background: #faf3ea; }
+  #suggest .sg-name { flex: 1; min-width: 0; } #suggest .sg-name small { display: block; color: var(--muted); font-size: 12px; }
+  #suggest .sg-go { color: var(--shu-dark); font-weight: 600; }
+  #suggest .sg-msg { padding: 10px 12px; color: var(--muted); }
+  #filterTag { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 5px 6px 5px 12px; border-radius: 999px; background: var(--shu); color: #fff; font-size: 13px; pointer-events: auto; }
+  #filterTag button { border: none; background: rgba(255,255,255,.25); color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
   .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
   .chips::-webkit-scrollbar { display: none; }
   .chip { flex: none; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: #fff; font-size: 13px; }
@@ -41,6 +57,7 @@
     padding: 9px 16px; border-radius: 999px; border: none; background: #fff; color: var(--shu-dark); font-weight: 600; font-size: 14px;
     box-shadow: 0 2px 10px rgba(0,0,0,.18); white-space: nowrap; }
   #areaBtn:disabled { opacity: .7; }
+  body.filtering #areaBtn { top: calc(var(--safe-top) + 138px); }
 
   /* ── 右下ボタン ── */
   #fabs { position: fixed; z-index: 1000; right: 12px; bottom: calc(var(--safe-bottom) + 24px); display: flex; flex-direction: column; gap: 10px; }
@@ -139,7 +156,12 @@
 <div id="topbar">
   <div class="titleRow">
     <h1>⛩ 御朱印マップ</h1>
-    <input id="q" type="search" placeholder="名前で絞り込み（例: 八幡）" enterkeyhint="search">
+    <form class="searchBox" id="qForm" role="search" autocomplete="off">
+      <span class="ico">🔍</span>
+      <input id="q" type="search" placeholder="寺社名・地名で検索" enterkeyhint="search" aria-label="寺社名・地名で検索">
+      <button type="button" id="qClear" aria-label="検索をクリア" hidden>✕</button>
+      <div id="suggest" hidden></div>
+    </form>
   </div>
   <div class="chips" id="chips">
     <button class="chip on" data-kind="all">すべて</button>
@@ -148,6 +170,7 @@
     <button class="chip" data-kind="visited">🔴 御朱印あり</button>
     <button class="chip" data-kind="notyet">未訪問</button>
   </div>
+  <div id="filterTag" hidden><span id="filterText"></span><button type="button" id="filterOff">解除 ✕</button></div>
 </div>
 
 <button id="areaBtn">🔍 このエリアを検索</button>
@@ -230,6 +253,7 @@ const CONFIG = {
   // 最初のサーバーがこの時間内に返事をしなければ、次のサーバーにも同時に問い合わせる
   overpassHedgeMs: 3500,
   nominatimEndpoint: 'https://nominatim.openstreetmap.org/reverse',
+  nominatimSearchEndpoint: 'https://nominatim.openstreetmap.org/search',
   wikipediaApi: 'https://ja.wikipedia.org/w/api.php',
   wikidataApi: 'https://www.wikidata.org/w/api.php',
   // Nominatim の利用規約: 1秒に1リクエストまで
@@ -622,6 +646,12 @@ async function searchTemplesInBounds(bbox, { kind = 'all', limit = 400, signal }
 // ─────────────────────────────────────────────
 const nominatimCache = new Map();
 let nominatimQueue = Promise.resolve();
+/** Nominatim の利用規約（1秒1件）を守るための順番待ち。結果はすぐ返し、次のリクエストとの間だけ空ける */
+function nominatimRun(fn) {
+  const job = nominatimQueue.then(fn);
+  nominatimQueue = job.catch(() => {}).then(() => sleep(CONFIG.nominatimIntervalMs));
+  return job;
+}
 
 function addressFromNominatim(a = {}) {
   const area = [
@@ -642,21 +672,42 @@ function addressFromNominatim(a = {}) {
 function reverseGeocode(lat, lon) {
   const key = `${lat.toFixed(5)},${lon.toFixed(5)}`;
   if (nominatimCache.has(key)) return nominatimCache.get(key);
-  const job = nominatimQueue.then(async () => {
+  const job = nominatimRun(async () => {
     const url =
       CONFIG.nominatimEndpoint +
       '?' +
       qs({ format: 'jsonv2', lat, lon, zoom: 18, addressdetails: 1, 'accept-language': 'ja' });
-    try {
-      const json = await fetchJSON(url);
-      return addressFromNominatim(json.address);
-    } finally {
-      await sleep(CONFIG.nominatimIntervalMs);
-    }
+    const json = await fetchJSON(url);
+    return addressFromNominatim(json.address);
   });
-  nominatimQueue = job.catch(() => {});
   nominatimCache.set(key, job);
+  job.catch(() => nominatimCache.delete(key)); // 失敗したら次回また試す
   return job;
+}
+
+/**
+ * 地名・寺社名で全国を検索（Nominatim）。地図をその場所へ動かすために使う
+ * @returns {Promise<Array<{id:string|null, name:string, label:string, lat:number, lon:number, isWorship:boolean, kind:string}>>}
+ */
+function searchPlaceName(text, { limit = 8 } = {}) {
+  return nominatimRun(async () => {
+    const url = CONFIG.nominatimSearchEndpoint + '?' +
+      qs({ format: 'jsonv2', q: text, countrycodes: 'jp', 'accept-language': 'ja', limit, addressdetails: 1 });
+    const list = await fetchJSON(url);
+    return list.map((r) => {
+      const isWorship = r.category === 'amenity' && r.type === 'place_of_worship';
+      const name = r.name || String(r.display_name).split(',')[0];
+      return {
+        id: r.osm_type && r.osm_id ? `${r.osm_type}/${r.osm_id}` : null,
+        name,
+        label: addressFromNominatim(r.address) || r.display_name,
+        lat: Number(r.lat),
+        lon: Number(r.lon),
+        isWorship,
+        kind: isWorship ? '寺社' : r.addresstype === 'railway' || r.type === 'station' ? '駅' : '地名など',
+      };
+    });
+  });
 }
 
 /**
@@ -1149,6 +1200,8 @@ async function searchArea({ auto = false, force = false } = {}) {
   } finally {
     clearInterval(tick);
     S.searching = false; btn.disabled = false; setAreaBtn();
+    if (S.openAfterLoad && S.places.has(S.openAfterLoad)) { const id = S.openAfterLoad; S.openAfterLoad = null; openDetail(id); }
+    updateFilterTag();
     if (S.pendingSearch) { const next = S.pendingSearch; S.pendingSearch = null; searchArea(next); }
   }
 }
@@ -1277,7 +1330,7 @@ document.querySelectorAll('[data-close]').forEach((b) => { b.onclick = () => { $
 
 function flyToPlace(placeId) {
   const p = S.places.get(placeId); if (!p) return;
-  if (!matches(p)) { S.kind = 'all'; S.q = ''; $('q').value = ''; syncChips(); renderMarkers(); }
+  if (!matches(p)) { S.kind = 'all'; S.q = ''; $('q').value = ''; syncChips(); renderMarkers(); updateFilterTag(); }
   map.setView([p.lat, p.lon], Math.max(map.getZoom(), 16), { animate: false });
   openDetail(placeId);
 }
@@ -1464,9 +1517,83 @@ $('btnList').onclick = () => {
 //  絞り込み・現在地
 // ═════════════════════════════════════════════
 function syncChips() { document.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c.dataset.kind === S.kind)); }
-$('chips').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; S.kind = c.dataset.kind; syncChips(); renderMarkers(); };
-$('q').oninput = () => { S.q = $('q').value.trim(); renderMarkers(); };
-$('q').onkeydown = (e) => { if (e.key === 'Enter') $('q').blur(); };
+$('chips').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; S.kind = c.dataset.kind; syncChips(); renderMarkers(); updateFilterTag(); };
+// ── 検索欄 ──
+// 入力中: 地図上のピンを名前で絞り込み、一致する寺社を候補に出す
+// 検索（Enter / 候補の「地図で探す」）: 全国の地名・寺社名から探して地図を移動
+function visibleMatches(limit = 6) {
+  const c = map.getCenter();
+  return [...S.places.values()]
+    .filter((p) => matches(p))
+    .map((p) => ({ p, d: Math.round(distanceMeters(c.lat, c.lng, p.lat, p.lon)) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, limit);
+}
+function countMatches() { let n = 0; for (const p of S.places.values()) if (matches(p)) n++; return n; }
+function updateFilterTag() {
+  const on = !!S.q && $('suggest').hidden;
+  $('filterTag').hidden = !on;
+  document.body.classList.toggle('filtering', on);
+  if (on) $('filterText').textContent = `「${S.q}」で絞り込み中（${countMatches()}件）`;
+  $('qClear').hidden = !$('q').value;
+}
+function renderSuggest() {
+  const q = $('q').value.trim();
+  if (!q) { $('suggest').hidden = true; updateFilterTag(); return; }
+  const hits = visibleMatches();
+  const total = countMatches();
+  $('suggest').innerHTML = `
+    <div class="sg-h">地図上の寺社（${total}件が一致）</div>
+    ${hits.length ? hits.map(({ p, d }) => `<button type="button" data-sg-place="${esc(p.id)}">
+        <span class="badge ${p.religion === 'shinto' ? 'shinto' : 'buddhist'}">${esc(p.type)}</span>
+        <span class="sg-name">${esc(p.name)}${p.address ? `<small>${esc(p.address)}</small>` : ''}</span>
+        <span class="muted" style="font-size:12px">${fmtDist(d)}</span></button>`).join('')
+      : `<div class="sg-msg">地図上には見つかりません</div>`}
+    <div class="sg-h">全国から探す</div>
+    <button type="submit"><span>🗾</span><span class="sg-name sg-go">「${esc(q)}」を全国の地名・寺社名から探す</span></button>`;
+  $('suggest').hidden = false;
+  updateFilterTag();
+}
+async function searchNationwide(q) {
+  $('suggest').innerHTML = `<div class="sg-h">全国から探す</div><div class="sg-msg">「${esc(q)}」を検索中…</div>`;
+  $('suggest').hidden = false;
+  try {
+    const list = await searchPlaceName(q);
+    if ($('q').value.trim() !== q) return; // 入力が変わっていたら捨てる
+    $('suggest').innerHTML = `<div class="sg-h">全国の検索結果（${list.length}件）</div>` + (list.length
+      ? list.map((r, i) => `<button type="button" data-sg-geo="${i}">
+          <span>${r.isWorship ? '⛩' : '📍'}</span>
+          <span class="sg-name">${esc(r.name)}<small>${esc(r.label)}</small></span>
+          <span class="muted" style="font-size:11px">${esc(r.kind)}</span></button>`).join('')
+      : `<div class="sg-msg">見つかりませんでした。別の言い方（例: 「〇〇神社」「〇〇駅」「市区町村名」）でお試しください</div>`);
+    S.geoResults = list;
+  } catch (e) {
+    $('suggest').innerHTML = `<div class="sg-msg" style="color:#c00">検索に失敗しました: ${esc(e.message)}</div>`;
+  }
+}
+function closeSuggest() { $('suggest').hidden = true; updateFilterTag(); }
+function clearSearch() { $('q').value = ''; S.q = ''; renderMarkers(); closeSuggest(); }
+
+$('q').oninput = () => { S.q = $('q').value.trim(); renderMarkers(); renderSuggest(); };
+$('q').onfocus = () => { if ($('q').value.trim()) renderSuggest(); };
+$('qForm').onsubmit = (e) => { e.preventDefault(); const q = $('q').value.trim(); if (q) searchNationwide(q); };
+$('qClear').onclick = () => { clearSearch(); $('q').focus(); };
+$('filterOff').onclick = clearSearch;
+$('suggest').addEventListener('click', (e) => {
+  const pl = e.target.closest('[data-sg-place]');
+  const geo = e.target.closest('[data-sg-geo]');
+  if (pl) { closeSuggest(); $('q').blur(); flyToPlace(pl.dataset.sgPlace); }
+  else if (geo) {
+    const r = S.geoResults[Number(geo.dataset.sgGeo)];
+    // 地名へ移動するときは絞り込みを解除して、その周辺の寺社をすべて表示
+    $('q').value = r.isWorship ? r.name : ''; S.q = r.isWorship ? r.name : '';
+    closeSuggest(); $('q').blur(); closeSheet();
+    S.openAfterLoad = r.isWorship ? r.id : null;
+    map.setView([r.lat, r.lon], r.isWorship ? 17 : 15, { animate: false });
+  }
+});
+// 検索欄の外をタップしたら候補を閉じる
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#qForm')) closeSuggest(); });
 $('areaBtn').onclick = () => {
   // 「読み込み済み」と表示された直後にもう一度押したら、保存データを使わず最新を取り直す
   const force = S.lastManual && Date.now() - S.lastManual < 15000;
