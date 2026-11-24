@@ -225,7 +225,10 @@ const CONFIG = {
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.osm.jp/api/interpreter',
   ],
+  // 最初のサーバーがこの時間内に返事をしなければ、次のサーバーにも同時に問い合わせる
+  overpassHedgeMs: 3500,
   nominatimEndpoint: 'https://nominatim.openstreetmap.org/reverse',
   wikipediaApi: 'https://ja.wikipedia.org/w/api.php',
   wikidataApi: 'https://www.wikidata.org/w/api.php',
@@ -389,7 +392,7 @@ function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all', limit 
       '[out:json][timeout:120];',
       `area["ISO3166-2"="${prefectureCode}"]["admin_level"="4"]->.pref;`,
       `nwr${filter}(area.pref);`,
-      `out center tags ${limit};`,
+      `out center tags qt ${limit};`,
     ].join('\n');
   }
   if (around) {
@@ -397,7 +400,7 @@ function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all', limit 
     return [
       '[out:json][timeout:60];',
       `nwr${filter}(around:${radius},${lat},${lon});`,
-      `out center tags ${limit};`,
+      `out center tags qt ${limit};`,
     ].join('\n');
   }
   if (bbox) {
@@ -405,35 +408,99 @@ function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all', limit 
     return [
       '[out:json][timeout:90];',
       `nwr${filter}(${f(bbox.south)},${f(bbox.west)},${f(bbox.north)},${f(bbox.east)});`,
-      `out center tags ${limit};`,
+      `out center tags qt ${limit};`,
     ].join('\n');
   }
   throw new Error('prefectureCode / around / bbox のどれかを指定してください');
 }
 
-/** Overpass に問い合わせる（混雑時は別サーバーに切り替え） */
-async function runOverpass(query, { signal } = {}) {
-  const errors = [];
-  for (const endpoint of CONFIG.overpassEndpoints) {
-    try {
-      const json = await fetchJSON(endpoint, {
+// ── Overpass サーバーの速さの記録（速いサーバーから順に使う） ──
+const STATS_KEY = 'temple-api:overpass-stats';
+const endpointStats = (() => {
+  try { return new Map(Object.entries(JSON.parse(globalThis.localStorage?.getItem(STATS_KEY) || '{}'))); } catch { return new Map(); }
+})();
+function recordEndpoint(url, ms, ok) {
+  const s = endpointStats.get(url) || { avgMs: null, fails: 0 };
+  if (ok) { s.avgMs = s.avgMs == null ? ms : Math.round(s.avgMs * 0.6 + ms * 0.4); s.fails = 0; }
+  else s.fails = Math.min(s.fails + 1, 5);
+  endpointStats.set(url, s);
+  try { globalThis.localStorage?.setItem(STATS_KEY, JSON.stringify(Object.fromEntries(endpointStats))); } catch {}
+}
+function endpointScore(url) {
+  const s = endpointStats.get(url);
+  if (!s) return 4000; // まだ使ったことのないサーバーは「そこそこ速い」とみなして試す
+  return (s.avgMs ?? 4000) + s.fails * 15000;
+}
+/** 速い順に並べたサーバー一覧 */
+function rankedOverpassEndpoints() {
+  return CONFIG.overpassEndpoints
+    .map((url, i) => ({ url, i, score: endpointScore(url) }))
+    .sort((a, b) => a.score - b.score || a.i - b.i)
+    .map((e) => e.url);
+}
+
+/**
+ * Overpass に問い合わせる。
+ * 一番速いサーバーにまず送り、overpassHedgeMs 待っても返事がなければ次のサーバーにも送る。
+ * 最初に返ってきた結果を使い、残りは中止する（混雑したサーバーで待たされない）。
+ */
+function runOverpass(query, { signal } = {}) {
+  const endpoints = rankedOverpassEndpoints();
+  const body = 'data=' + encodeURIComponent(query);
+  return new Promise((resolve, reject) => {
+    const errors = [];
+    const ctrls = [];
+    const pending = new Map(); // url → 開始時刻
+    let started = 0, failed = 0, settled = false, hedgeTimer = null;
+
+    const finish = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hedgeTimer);
+      // 負けたサーバーは「少なくともこれだけ遅かった」として記録し、次回の順位を下げる
+      if (fn === resolve) for (const [u, t] of pending) recordEndpoint(u, Date.now() - t + CONFIG.overpassHedgeMs, true);
+      ctrls.forEach((c) => c.abort());
+      fn(v);
+    };
+    const scheduleHedge = () => {
+      clearTimeout(hedgeTimer);
+      if (started < endpoints.length) hedgeTimer = setTimeout(() => { startNext(); }, CONFIG.overpassHedgeMs);
+    };
+    const startNext = () => {
+      if (settled || started >= endpoints.length) return;
+      const url = endpoints[started++];
+      const ctrl = new AbortController();
+      ctrls.push(ctrl);
+      const t0 = Date.now();
+      pending.set(url, t0);
+      fetchJSON(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-        body: 'data=' + encodeURIComponent(query),
-        signal,
+        body,
+        signal: ctrl.signal,
         timeoutMs: CONFIG.overpassTimeoutMs,
-      });
-      if (json.remark && /runtime error|timed out/i.test(json.remark)) {
-        throw new Error('Overpass: ' + json.remark);
-      }
-      return json.elements || [];
-    } catch (e) {
-      if (signal?.aborted) throw e;
-      errors.push(e.message);
-      // 429（混雑）/ 5xx / タイムアウトのときは次のサーバーへ
-    }
-  }
-  throw new Error('Overpass API の全サーバーで失敗しました\n- ' + errors.join('\n- '));
+      })
+        .then((json) => {
+          if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark)) throw new Error('Overpass: ' + json.remark);
+          pending.delete(url);
+          recordEndpoint(url, Date.now() - t0, true);
+          finish(resolve, json.elements || []);
+        })
+        .catch((e) => {
+          if (settled) return;
+          pending.delete(url);
+          recordEndpoint(url, null, false);
+          errors.push(`${new URL(url).host}: ${e.message}`);
+          failed++;
+          if (started < endpoints.length) { startNext(); scheduleHedge(); } // 失敗したらすぐ次へ
+          else if (failed === started) finish(reject, new Error('Overpass API の全サーバーで失敗しました\n- ' + errors.join('\n- ')));
+        });
+      scheduleHedge();
+    };
+
+    signal?.addEventListener('abort', () => finish(reject, new DOMException('中止しました', 'AbortError')), { once: true });
+    startNext();
+  });
 }
 
 /** OSM の addr:* タグから日本式の住所文字列を作る */
@@ -822,17 +889,30 @@ const DB_NAME = 'goshuin-map';
 let dbPromise;
 function openDB() {
   return (dbPromise ||= new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
-      const st = req.result.createObjectStore('records', { keyPath: 'id' });
-      st.createIndex('placeId', 'placeId');
+      const db = req.result;
+      if (!db.objectStoreNames.contains('records')) db.createObjectStore('records', { keyPath: 'id' }).createIndex('placeId', 'placeId');
+      // v2: 一度検索した地域の寺社データ（約2km四方のマスごと）
+      if (!db.objectStoreNames.contains('cells')) db.createObjectStore('cells', { keyPath: 'key' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   }));
 }
 const reqP = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
-async function store(mode) { return (await openDB()).transaction('records', mode).objectStore('records'); }
+async function store(mode, name = 'records') { return (await openDB()).transaction(name, mode).objectStore(name); }
+async function cellGetMany(keys) {
+  const st = await store('readonly', 'cells');
+  const out = new Map();
+  await Promise.all(keys.map((k) => reqP(st.get(k)).then((v) => { if (v) out.set(k, v); })));
+  return out;
+}
+async function cellPutMany(recs) {
+  const st = await store('readwrite', 'cells');
+  await Promise.all(recs.map((r) => reqP(st.put(r))));
+}
+const cellClear = async () => reqP((await store('readwrite', 'cells')).clear());
 const dbAll = async () => reqP((await store('readonly')).getAll());
 const dbDelete = async (id) => reqP((await store('readwrite')).delete(id));
 async function dbPut(rec) {
@@ -896,7 +976,10 @@ const S = {
   editing: null,       // 編集中の記録
   formPhoto: undefined // フォームで選んだ写真（undefined=変更なし / null=削除 / Blob=新規）
 };
-const AREA_LIMIT = 400;
+const AREA_LIMIT = 1500;           // 1回の問い合わせで受け取る最大件数
+const CELL_LAT = 0.02, CELL_LON = 0.025; // キャッシュのマス（約2km四方）
+const CELL_TTL = 7 * 24 * 3600 * 1000;   // キャッシュの有効期限（7日）
+const memCells = new Set();               // この起動中に読み込み済みのマス
 const LS_VIEW = 'goshuin-map:view';
 
 function today() {
@@ -986,32 +1069,94 @@ function addPlaces(list) {
 }
 
 // ═════════════════════════════════════════════
-//  エリア検索
+//  エリア検索（約2km四方のマスに分けて、一度調べたマスは端末に保存）
 // ═════════════════════════════════════════════
-async function searchArea({ quiet = false } = {}) {
-  if (S.searching) return;
-  if (map.getZoom() < 12) { toast('範囲が広すぎます。もう少し拡大してから検索してください'); return; }
-  const b = map.getBounds();
+const cellKey = (i, j) => `${i}:${j}`;
+const cellOf = (lat, lon) => cellKey(Math.floor(lat / CELL_LAT), Math.floor(lon / CELL_LON));
+function cellsInView(b) {
+  const out = [];
+  const i0 = Math.floor(b.getSouth() / CELL_LAT), i1 = Math.floor(b.getNorth() / CELL_LAT);
+  const j0 = Math.floor(b.getWest() / CELL_LON), j1 = Math.floor(b.getEast() / CELL_LON);
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) out.push({ i, j, key: cellKey(i, j) });
+  return out;
+}
+const slim = ({ tags, wiki, _wikiLoading, _addrLoading, _addrTried, ...rest }) => rest; // 保存用に軽くする
+
+function setAreaBtn(text) { $('areaBtn').textContent = text || '🔍 このエリアを検索'; }
+
+/**
+ * 表示範囲の寺社を読み込む
+ * auto=true: 地図を動かしたときの自動読み込み（成功時はメッセージを出さない）
+ * force=true: 保存データを使わず最新を取り直す（ボタンを押したとき）
+ */
+async function searchArea({ auto = false, force = false } = {}) {
+  if (S.searching) { S.pendingSearch = { auto, force }; return; }
+  if (map.getZoom() < (auto ? 13 : 12)) {
+    if (!auto) toast('範囲が広すぎます。もう少し拡大してから検索してください');
+    return;
+  }
   S.searching = true;
   const btn = $('areaBtn'); btn.disabled = true;
   const t0 = Date.now();
-  const tick = setInterval(() => { btn.textContent = `⏳ 検索中… ${Math.round((Date.now() - t0) / 1000)}秒`; }, 500);
-  btn.textContent = '⏳ 検索中…';
+  let tick = null;
   try {
-    const list = await searchTemplesInBounds({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() }, { limit: AREA_LIMIT });
+    const cells = cellsInView(map.getBounds());
+    // ① 端末に保存済みのマスはすぐ表示
+    let missing = cells;
+    if (!force) {
+      const need = cells.filter((c) => !memCells.has(c.key));
+      const saved = need.length ? await cellGetMany(need.map((c) => c.key)).catch(() => new Map()) : new Map();
+      missing = [];
+      for (const c of need) {
+        const rec = saved.get(c.key);
+        if (rec && Date.now() - rec.ts < CELL_TTL) { addPlaces(rec.places.map((p) => ({ ...p }))); memCells.add(c.key); }
+        else missing.push(c);
+      }
+      renderMarkers();
+    }
+    if (!missing.length) {
+      if (!auto) { toast('この範囲は読み込み済みです（最新にするにはもう一度押してください）'); S.lastManual = Date.now(); }
+      return;
+    }
+
+    // ② まだ調べていないマスだけ Overpass に問い合わせる
+    setAreaBtn('⏳ 読み込み中…');
+    tick = setInterval(() => setAreaBtn(`⏳ 読み込み中… ${Math.round((Date.now() - t0) / 1000)}秒`), 1000);
+    const bbox = {
+      south: Math.min(...missing.map((c) => c.i)) * CELL_LAT,
+      north: (Math.max(...missing.map((c) => c.i)) + 1) * CELL_LAT,
+      west: Math.min(...missing.map((c) => c.j)) * CELL_LON,
+      east: (Math.max(...missing.map((c) => c.j)) + 1) * CELL_LON,
+    };
+    const list = await searchTemplesInBounds(bbox, { limit: AREA_LIMIT });
     addPlaces(list);
     renderMarkers();
-    if (!quiet || !list.length) {
-      toast(list.length
-        ? `${list.length}件の寺社が見つかりました${list.length >= AREA_LIMIT ? `\n（上限${AREA_LIMIT}件。拡大して再検索すると漏れなく表示されます）` : ''}`
-        : 'この範囲には寺社が見つかりませんでした');
+
+    // ③ 結果をマスごとに保存（上限に達した＝取りこぼしがあるかもしれない時は保存しない）
+    if (list.length < AREA_LIMIT) {
+      const byCell = new Map(missing.map((c) => [c.key, []]));
+      for (const p of list) byCell.get(cellOf(p.lat, p.lon))?.push(slim(p));
+      const now = Date.now();
+      await cellPutMany([...byCell].map(([key, places]) => ({ key, ts: now, places }))).catch(() => {});
+      missing.forEach((c) => memCells.add(c.key));
+    } else {
+      toast('寺社が多いため一部だけ表示しています。拡大するとすべて表示されます');
     }
+    if (!auto) toast(`${list.length}件を読み込みました（${((Date.now() - t0) / 1000).toFixed(1)}秒）`);
   } catch (e) {
-    toast('検索に失敗しました。少し待ってからもう一度お試しください。\n' + e.message.split('\n')[0], true, 6000);
+    if (!auto || !S.autoErrorShown) toast('読み込みに失敗しました。少し待ってからもう一度お試しください。\n' + e.message.split('\n')[0], true, 6000);
+    if (auto) S.autoErrorShown = true;
   } finally {
-    clearInterval(tick); S.searching = false; btn.disabled = false; btn.textContent = '🔍 このエリアを検索';
+    clearInterval(tick);
+    S.searching = false; btn.disabled = false; setAreaBtn();
+    if (S.pendingSearch) { const next = S.pendingSearch; S.pendingSearch = null; searchArea(next); }
   }
 }
+
+// 地図を動かしたら、少し待ってから自動で読み込む
+let autoTimer = null;
+map.on('movestart', () => clearTimeout(autoTimer));
+map.on('moveend', () => { clearTimeout(autoTimer); autoTimer = setTimeout(() => searchArea({ auto: true }), 600); });
 
 // ═════════════════════════════════════════════
 //  詳細シート
@@ -1125,6 +1270,7 @@ document.addEventListener('click', async (e) => {
   else if (act === 'openPlace') { $('listPanel').hidden = true; flyToPlace(id); }
   else if (act === 'export') exportBackup();
   else if (act === 'import') $('importFile').click();
+  else if (act === 'clearCache') { await cellClear().catch(() => {}); memCells.clear(); toast('地図データを削除しました'); }
 });
 $('viewer').onclick = () => { $('viewer').hidden = true; };
 document.querySelectorAll('[data-close]').forEach((b) => { b.onclick = () => { $(b.dataset.close).hidden = true; }; });
@@ -1243,6 +1389,11 @@ function renderBook() {
       <button class="btnSub" data-act="export">バックアップを保存</button>
       <button class="btnSub" data-act="import">バックアップから復元</button>
     </div>
+  </div>
+  <div class="backup" style="border-style:solid;border-color:var(--line)">
+    <b>🗺 地図データ</b><br>
+    一度表示した地域の寺社データは、すばやく表示するため端末に7日間保存しています。古い情報が気になるときは削除してください（御朱印の記録は消えません）。
+    <div class="row"><button class="btnSub" data-act="clearCache">地図データを削除</button></div>
   </div>`;
   $('bookBody').innerHTML = html;
 }
@@ -1316,7 +1467,12 @@ function syncChips() { document.querySelectorAll('.chip').forEach((c) => c.class
 $('chips').onclick = (e) => { const c = e.target.closest('.chip'); if (!c) return; S.kind = c.dataset.kind; syncChips(); renderMarkers(); };
 $('q').oninput = () => { S.q = $('q').value.trim(); renderMarkers(); };
 $('q').onkeydown = (e) => { if (e.key === 'Enter') $('q').blur(); };
-$('areaBtn').onclick = () => searchArea();
+$('areaBtn').onclick = () => {
+  // 「読み込み済み」と表示された直後にもう一度押したら、保存データを使わず最新を取り直す
+  const force = S.lastManual && Date.now() - S.lastManual < 15000;
+  S.lastManual = null;
+  searchArea({ force });
+};
 $('btnLocate').onclick = () => {
   if (!navigator.geolocation) { toast('この環境では現在地が使えません', true); return; }
   toast('現在地を取得中…');
@@ -1340,7 +1496,7 @@ $('btnLocate').onclick = () => {
     toast('記録を読み込めませんでした（プライベートブラウズでは保存できません）', true, 6000);
   }
   renderMarkers();
-  searchArea({ quiet: true });
+  searchArea({ auto: true });
 })();
 </script>
 </body>

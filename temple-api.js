@@ -24,7 +24,10 @@ export const CONFIG = {
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.osm.jp/api/interpreter',
   ],
+  // 最初のサーバーがこの時間内に返事をしなければ、次のサーバーにも同時に問い合わせる
+  overpassHedgeMs: 3500,
   nominatimEndpoint: 'https://nominatim.openstreetmap.org/reverse',
   wikipediaApi: 'https://ja.wikipedia.org/w/api.php',
   wikidataApi: 'https://www.wikidata.org/w/api.php',
@@ -188,7 +191,7 @@ export function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all',
       '[out:json][timeout:120];',
       `area["ISO3166-2"="${prefectureCode}"]["admin_level"="4"]->.pref;`,
       `nwr${filter}(area.pref);`,
-      `out center tags ${limit};`,
+      `out center tags qt ${limit};`,
     ].join('\n');
   }
   if (around) {
@@ -196,7 +199,7 @@ export function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all',
     return [
       '[out:json][timeout:60];',
       `nwr${filter}(around:${radius},${lat},${lon});`,
-      `out center tags ${limit};`,
+      `out center tags qt ${limit};`,
     ].join('\n');
   }
   if (bbox) {
@@ -204,35 +207,99 @@ export function buildOverpassQuery({ prefectureCode, around, bbox, kind = 'all',
     return [
       '[out:json][timeout:90];',
       `nwr${filter}(${f(bbox.south)},${f(bbox.west)},${f(bbox.north)},${f(bbox.east)});`,
-      `out center tags ${limit};`,
+      `out center tags qt ${limit};`,
     ].join('\n');
   }
   throw new Error('prefectureCode / around / bbox のどれかを指定してください');
 }
 
-/** Overpass に問い合わせる（混雑時は別サーバーに切り替え） */
-export async function runOverpass(query, { signal } = {}) {
-  const errors = [];
-  for (const endpoint of CONFIG.overpassEndpoints) {
-    try {
-      const json = await fetchJSON(endpoint, {
+// ── Overpass サーバーの速さの記録（速いサーバーから順に使う） ──
+const STATS_KEY = 'temple-api:overpass-stats';
+const endpointStats = (() => {
+  try { return new Map(Object.entries(JSON.parse(globalThis.localStorage?.getItem(STATS_KEY) || '{}'))); } catch { return new Map(); }
+})();
+function recordEndpoint(url, ms, ok) {
+  const s = endpointStats.get(url) || { avgMs: null, fails: 0 };
+  if (ok) { s.avgMs = s.avgMs == null ? ms : Math.round(s.avgMs * 0.6 + ms * 0.4); s.fails = 0; }
+  else s.fails = Math.min(s.fails + 1, 5);
+  endpointStats.set(url, s);
+  try { globalThis.localStorage?.setItem(STATS_KEY, JSON.stringify(Object.fromEntries(endpointStats))); } catch {}
+}
+function endpointScore(url) {
+  const s = endpointStats.get(url);
+  if (!s) return 4000; // まだ使ったことのないサーバーは「そこそこ速い」とみなして試す
+  return (s.avgMs ?? 4000) + s.fails * 15000;
+}
+/** 速い順に並べたサーバー一覧 */
+export function rankedOverpassEndpoints() {
+  return CONFIG.overpassEndpoints
+    .map((url, i) => ({ url, i, score: endpointScore(url) }))
+    .sort((a, b) => a.score - b.score || a.i - b.i)
+    .map((e) => e.url);
+}
+
+/**
+ * Overpass に問い合わせる。
+ * 一番速いサーバーにまず送り、overpassHedgeMs 待っても返事がなければ次のサーバーにも送る。
+ * 最初に返ってきた結果を使い、残りは中止する（混雑したサーバーで待たされない）。
+ */
+export function runOverpass(query, { signal } = {}) {
+  const endpoints = rankedOverpassEndpoints();
+  const body = 'data=' + encodeURIComponent(query);
+  return new Promise((resolve, reject) => {
+    const errors = [];
+    const ctrls = [];
+    const pending = new Map(); // url → 開始時刻
+    let started = 0, failed = 0, settled = false, hedgeTimer = null;
+
+    const finish = (fn, v) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hedgeTimer);
+      // 負けたサーバーは「少なくともこれだけ遅かった」として記録し、次回の順位を下げる
+      if (fn === resolve) for (const [u, t] of pending) recordEndpoint(u, Date.now() - t + CONFIG.overpassHedgeMs, true);
+      ctrls.forEach((c) => c.abort());
+      fn(v);
+    };
+    const scheduleHedge = () => {
+      clearTimeout(hedgeTimer);
+      if (started < endpoints.length) hedgeTimer = setTimeout(() => { startNext(); }, CONFIG.overpassHedgeMs);
+    };
+    const startNext = () => {
+      if (settled || started >= endpoints.length) return;
+      const url = endpoints[started++];
+      const ctrl = new AbortController();
+      ctrls.push(ctrl);
+      const t0 = Date.now();
+      pending.set(url, t0);
+      fetchJSON(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-        body: 'data=' + encodeURIComponent(query),
-        signal,
+        body,
+        signal: ctrl.signal,
         timeoutMs: CONFIG.overpassTimeoutMs,
-      });
-      if (json.remark && /runtime error|timed out/i.test(json.remark)) {
-        throw new Error('Overpass: ' + json.remark);
-      }
-      return json.elements || [];
-    } catch (e) {
-      if (signal?.aborted) throw e;
-      errors.push(e.message);
-      // 429（混雑）/ 5xx / タイムアウトのときは次のサーバーへ
-    }
-  }
-  throw new Error('Overpass API の全サーバーで失敗しました\n- ' + errors.join('\n- '));
+      })
+        .then((json) => {
+          if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark)) throw new Error('Overpass: ' + json.remark);
+          pending.delete(url);
+          recordEndpoint(url, Date.now() - t0, true);
+          finish(resolve, json.elements || []);
+        })
+        .catch((e) => {
+          if (settled) return;
+          pending.delete(url);
+          recordEndpoint(url, null, false);
+          errors.push(`${new URL(url).host}: ${e.message}`);
+          failed++;
+          if (started < endpoints.length) { startNext(); scheduleHedge(); } // 失敗したらすぐ次へ
+          else if (failed === started) finish(reject, new Error('Overpass API の全サーバーで失敗しました\n- ' + errors.join('\n- ')));
+        });
+      scheduleHedge();
+    };
+
+    signal?.addEventListener('abort', () => finish(reject, new DOMException('中止しました', 'AbortError')), { once: true });
+    startNext();
+  });
 }
 
 /** OSM の addr:* タグから日本式の住所文字列を作る */
