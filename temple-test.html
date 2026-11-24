@@ -132,6 +132,7 @@ const CONFIG = {
   // 最初のサーバーがこの時間内に返事をしなければ、次のサーバーにも同時に問い合わせる
   overpassHedgeMs: 3500,
   nominatimEndpoint: 'https://nominatim.openstreetmap.org/reverse',
+  nominatimSearchEndpoint: 'https://nominatim.openstreetmap.org/search',
   wikipediaApi: 'https://ja.wikipedia.org/w/api.php',
   wikidataApi: 'https://www.wikidata.org/w/api.php',
   // Nominatim の利用規約: 1秒に1リクエストまで
@@ -524,6 +525,12 @@ async function searchTemplesInBounds(bbox, { kind = 'all', limit = 400, signal }
 // ─────────────────────────────────────────────
 const nominatimCache = new Map();
 let nominatimQueue = Promise.resolve();
+/** Nominatim の利用規約（1秒1件）を守るための順番待ち。結果はすぐ返し、次のリクエストとの間だけ空ける */
+function nominatimRun(fn) {
+  const job = nominatimQueue.then(fn);
+  nominatimQueue = job.catch(() => {}).then(() => sleep(CONFIG.nominatimIntervalMs));
+  return job;
+}
 
 function addressFromNominatim(a = {}) {
   const area = [
@@ -544,21 +551,42 @@ function addressFromNominatim(a = {}) {
 function reverseGeocode(lat, lon) {
   const key = `${lat.toFixed(5)},${lon.toFixed(5)}`;
   if (nominatimCache.has(key)) return nominatimCache.get(key);
-  const job = nominatimQueue.then(async () => {
+  const job = nominatimRun(async () => {
     const url =
       CONFIG.nominatimEndpoint +
       '?' +
       qs({ format: 'jsonv2', lat, lon, zoom: 18, addressdetails: 1, 'accept-language': 'ja' });
-    try {
-      const json = await fetchJSON(url);
-      return addressFromNominatim(json.address);
-    } finally {
-      await sleep(CONFIG.nominatimIntervalMs);
-    }
+    const json = await fetchJSON(url);
+    return addressFromNominatim(json.address);
   });
-  nominatimQueue = job.catch(() => {});
   nominatimCache.set(key, job);
+  job.catch(() => nominatimCache.delete(key)); // 失敗したら次回また試す
   return job;
+}
+
+/**
+ * 地名・寺社名で全国を検索（Nominatim）。地図をその場所へ動かすために使う
+ * @returns {Promise<Array<{id:string|null, name:string, label:string, lat:number, lon:number, isWorship:boolean, kind:string}>>}
+ */
+function searchPlaceName(text, { limit = 8 } = {}) {
+  return nominatimRun(async () => {
+    const url = CONFIG.nominatimSearchEndpoint + '?' +
+      qs({ format: 'jsonv2', q: text, countrycodes: 'jp', 'accept-language': 'ja', limit, addressdetails: 1 });
+    const list = await fetchJSON(url);
+    return list.map((r) => {
+      const isWorship = r.category === 'amenity' && r.type === 'place_of_worship';
+      const name = r.name || String(r.display_name).split(',')[0];
+      return {
+        id: r.osm_type && r.osm_id ? `${r.osm_type}/${r.osm_id}` : null,
+        name,
+        label: addressFromNominatim(r.address) || r.display_name,
+        lat: Number(r.lat),
+        lon: Number(r.lon),
+        isWorship,
+        kind: isWorship ? '寺社' : r.addresstype === 'railway' || r.type === 'station' ? '駅' : '地名など',
+      };
+    });
+  });
 }
 
 /**
