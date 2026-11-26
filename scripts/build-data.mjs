@@ -26,6 +26,8 @@ const PREFS = process.env.PREF_CODES
   : PREFECTURES;
 const PAUSE_MS = Number(process.env.PAUSE_MS ?? 3000);    // 都道府県ごとの間隔（公開サーバーへの配慮）
 const RETRIES = Number(process.env.RETRIES ?? 4);
+const CONCURRENCY = Number(process.env.CONCURRENCY ?? 2);  // 同時に取得する都道府県の数（公開サーバーの1IPあたりの上限に合わせて2）
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS ?? 5 * 60 * 1000);
 const UA = 'temples-shrines_search data builder (https://github.com/Paji94/temples-shrines_search)';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -33,7 +35,7 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
 function prefectureQuery(code) {
   return [
-    '[out:json][timeout:600][maxsize:536870912];',
+    '[out:json][timeout:280][maxsize:536870912];',
     `area["ISO3166-2"="${code}"]["admin_level"="4"]->.pref;`,
     'nwr["amenity"="place_of_worship"]["religion"~"^(shinto|buddhist)$"]["name"](area.pref);',
     'out center tags qt;',
@@ -49,7 +51,7 @@ async function fetchPrefecture(pref) {
       const host = new URL(url).host;
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 11 * 60 * 1000);
+        const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'User-Agent': UA, Accept: 'application/json' },
@@ -60,6 +62,8 @@ async function fetchPrefecture(pref) {
         const json = await res.json();
         if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark)) throw new Error(json.remark);
         if (!Array.isArray(json.elements)) throw new Error('elements がありません');
+        // 混雑したサーバーは空の結果を返すことがある。寺社が0件の都道府県はないので失敗として扱う
+        if (json.elements.length === 0) throw new Error('0件（サーバーの不調とみなして再取得）');
         return json.elements;
       } catch (e) {
         lastErr = new Error(`${host}: ${e.message}`);
@@ -80,18 +84,27 @@ async function readJSON(file) {
 async function main() {
   log(`取得開始: ${PREFS.length}都道府県 → ${path.relative(ROOT, OUT_DIR)}/`);
   const places = new Map();
-  for (const [i, pref] of PREFS.entries()) {
-    const t0 = Date.now();
-    const elements = await fetchPrefecture(pref);
-    let n = 0;
-    for (const el of elements) {
-      const p = normalizeElement(el);
-      if (!p.name || p.lat == null || !/^(shinto|buddhist)$/.test(p.religion)) continue;
-      if (!places.has(p.id)) { places.set(p.id, p); n++; }
+  const perPref = {};
+  let next = 0, done = 0;
+  async function worker() {
+    while (next < PREFS.length) {
+      const pref = PREFS[next++];
+      const t0 = Date.now();
+      const elements = await fetchPrefecture(pref);
+      let n = 0;
+      for (const el of elements) {
+        const p = normalizeElement(el);
+        if (!p.name || p.lat == null || !/^(shinto|buddhist)$/.test(p.religion)) continue;
+        if (!places.has(p.id)) places.set(p.id, p);
+        n++;
+      }
+      perPref[pref.name] = n;
+      log(`${String(++done).padStart(2)}/${PREFS.length} ${pref.name}: ${n}件（${((Date.now() - t0) / 1000).toFixed(0)}秒）`);
+      if (n === 0) throw new Error(`${pref.name} の寺社が0件でした`);
+      if (next < PREFS.length) await sleep(PAUSE_MS);
     }
-    log(`${String(i + 1).padStart(2)}/${PREFS.length} ${pref.name}: ${n}件（${((Date.now() - t0) / 1000).toFixed(0)}秒）`);
-    if (i < PREFS.length - 1) await sleep(PAUSE_MS);
   }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, PREFS.length) }, worker));
 
   // 前回より極端に少ない場合は、取得の失敗とみなして上書きしない
   const prevIndex = await readJSON(path.join(OUT_DIR, 'index.json'));
