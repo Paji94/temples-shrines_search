@@ -134,7 +134,7 @@ const CONFIG = {
     'https://overpass.osm.jp/api/interpreter',
   ],
   // 最初のサーバーがこの時間内に返事をしなければ、次のサーバーにも同時に問い合わせる
-  overpassHedgeMs: 3500,
+  overpassHedgeMs: 2000,
   nominatimEndpoint: 'https://nominatim.openstreetmap.org/reverse',
   nominatimSearchEndpoint: 'https://nominatim.openstreetmap.org/search',
   wikipediaApi: 'https://ja.wikipedia.org/w/api.php',
@@ -522,6 +522,68 @@ async function searchTemplesInBounds(bbox, { kind = 'all', limit = 400, signal }
     .map((el) => normalizeElement(el, center))
     .filter((p) => p.name && p.lat != null)
     .sort((a, b) => a.distance - b.distance);
+}
+
+// ─────────────────────────────────────────────
+// 事前に作った全国データ（地域タイル）の形式
+//   data/index.json        … { version, generatedAt, tileLat, tileLon, count, tiles: { "349_1086": 件数, ... } }
+//   data/tiles/<key>.json   … { "p": [ 行, 行, ... ] }
+//   行 = [id, 緯度, 経度, 名称, 種別(s=神社/b=寺院), 住所, よみ, 宗派, wikidata, wikipedia, website]
+//        id は "n123"(node) / "w123"(way) / "r123"(relation)。末尾の空欄は省略
+// ─────────────────────────────────────────────
+const TILE_LAT = 0.1;   // 約11km
+const TILE_LON = 0.125; // 約11km（北緯35度付近）
+
+function tileKeyOf(lat, lon) {
+  return `${Math.floor(lat / TILE_LAT)}_${Math.floor(lon / TILE_LON)}`;
+}
+
+/** 範囲 {south, west, north, east} にかかるタイルのキー一覧 */
+function tileKeysInBounds(b) {
+  const keys = [];
+  const i0 = Math.floor(b.south / TILE_LAT), i1 = Math.floor(b.north / TILE_LAT);
+  const j0 = Math.floor(b.west / TILE_LON), j1 = Math.floor(b.east / TILE_LON);
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) keys.push(`${i}_${j}`);
+  return keys;
+}
+
+/** タイルの周囲1マス分のキー（先読み用） */
+function neighborTileKeys(keys) {
+  const set = new Set(keys);
+  const out = new Set();
+  for (const k of keys) {
+    const [i, j] = k.split('_').map(Number);
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+      const n = `${i + di}_${j + dj}`;
+      if (!set.has(n)) out.add(n);
+    }
+  }
+  return [...out];
+}
+
+function rowFromPlace(p) {
+  const [type, num] = p.id.split('/');
+  const row = [
+    type[0] + num, Number(p.lat.toFixed(5)), Number(p.lon.toFixed(5)), p.name,
+    p.religion === 'shinto' ? 's' : 'b',
+    p.address || '', p.kana || '', p.denomination || '', p.wikidata || '', p.wikipedia || '', p.website || '',
+  ];
+  while (row.length > 5 && row[row.length - 1] === '') row.pop();
+  return row;
+}
+
+function placeFromRow(r) {
+  const [id, lat, lon, name, rel, address, kana, denom, wd, wp, web] = r;
+  const type = { n: 'node', w: 'way', r: 'relation' }[id[0]];
+  const osmId = `${type}/${id.slice(1)}`;
+  const shinto = rel === 's';
+  return {
+    id: osmId, osmUrl: `https://www.openstreetmap.org/${osmId}`, name, kana: kana || null,
+    religion: shinto ? 'shinto' : 'buddhist', type: shinto ? '神社' : '寺院', lat, lon,
+    address: address || null, addressSource: address ? 'osm' : null, postcode: null,
+    denomination: denom || null, wikidata: wd || null, wikipedia: wp || null, website: web || null,
+    distance: null, wiki: null,
+  };
 }
 
 // ─────────────────────────────────────────────

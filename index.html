@@ -254,7 +254,7 @@ const CONFIG = {
     'https://overpass.osm.jp/api/interpreter',
   ],
   // 最初のサーバーがこの時間内に返事をしなければ、次のサーバーにも同時に問い合わせる
-  overpassHedgeMs: 3500,
+  overpassHedgeMs: 2000,
   nominatimEndpoint: 'https://nominatim.openstreetmap.org/reverse',
   nominatimSearchEndpoint: 'https://nominatim.openstreetmap.org/search',
   wikipediaApi: 'https://ja.wikipedia.org/w/api.php',
@@ -642,6 +642,68 @@ async function searchTemplesInBounds(bbox, { kind = 'all', limit = 400, signal }
     .map((el) => normalizeElement(el, center))
     .filter((p) => p.name && p.lat != null)
     .sort((a, b) => a.distance - b.distance);
+}
+
+// ─────────────────────────────────────────────
+// 事前に作った全国データ（地域タイル）の形式
+//   data/index.json        … { version, generatedAt, tileLat, tileLon, count, tiles: { "349_1086": 件数, ... } }
+//   data/tiles/<key>.json   … { "p": [ 行, 行, ... ] }
+//   行 = [id, 緯度, 経度, 名称, 種別(s=神社/b=寺院), 住所, よみ, 宗派, wikidata, wikipedia, website]
+//        id は "n123"(node) / "w123"(way) / "r123"(relation)。末尾の空欄は省略
+// ─────────────────────────────────────────────
+const TILE_LAT = 0.1;   // 約11km
+const TILE_LON = 0.125; // 約11km（北緯35度付近）
+
+function tileKeyOf(lat, lon) {
+  return `${Math.floor(lat / TILE_LAT)}_${Math.floor(lon / TILE_LON)}`;
+}
+
+/** 範囲 {south, west, north, east} にかかるタイルのキー一覧 */
+function tileKeysInBounds(b) {
+  const keys = [];
+  const i0 = Math.floor(b.south / TILE_LAT), i1 = Math.floor(b.north / TILE_LAT);
+  const j0 = Math.floor(b.west / TILE_LON), j1 = Math.floor(b.east / TILE_LON);
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) keys.push(`${i}_${j}`);
+  return keys;
+}
+
+/** タイルの周囲1マス分のキー（先読み用） */
+function neighborTileKeys(keys) {
+  const set = new Set(keys);
+  const out = new Set();
+  for (const k of keys) {
+    const [i, j] = k.split('_').map(Number);
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+      const n = `${i + di}_${j + dj}`;
+      if (!set.has(n)) out.add(n);
+    }
+  }
+  return [...out];
+}
+
+function rowFromPlace(p) {
+  const [type, num] = p.id.split('/');
+  const row = [
+    type[0] + num, Number(p.lat.toFixed(5)), Number(p.lon.toFixed(5)), p.name,
+    p.religion === 'shinto' ? 's' : 'b',
+    p.address || '', p.kana || '', p.denomination || '', p.wikidata || '', p.wikipedia || '', p.website || '',
+  ];
+  while (row.length > 5 && row[row.length - 1] === '') row.pop();
+  return row;
+}
+
+function placeFromRow(r) {
+  const [id, lat, lon, name, rel, address, kana, denom, wd, wp, web] = r;
+  const type = { n: 'node', w: 'way', r: 'relation' }[id[0]];
+  const osmId = `${type}/${id.slice(1)}`;
+  const shinto = rel === 's';
+  return {
+    id: osmId, osmUrl: `https://www.openstreetmap.org/${osmId}`, name, kana: kana || null,
+    religion: shinto ? 'shinto' : 'buddhist', type: shinto ? '神社' : '寺院', lat, lon,
+    address: address || null, addressSource: address ? 'osm' : null, postcode: null,
+    denomination: denom || null, wikidata: wd || null, wikipedia: wp || null, website: web || null,
+    distance: null, wiki: null,
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -1034,6 +1096,11 @@ const AREA_LIMIT = 1500;           // 1回の問い合わせで受け取る最�
 const CELL_LAT = 0.02, CELL_LON = 0.025; // キャッシュのマス（約2km四方）
 const CELL_TTL = 7 * 24 * 3600 * 1000;   // キャッシュの有効期限（7日）
 const memCells = new Set();               // この起動中に読み込み済みのマス
+const DATA_BASE = 'data/';                // 事前に作った全国データ（GitHub Actions で週1回更新）
+const LS_DATAVER = 'goshuin-map:data-version';
+const memTiles = new Set();               // 読み込み済みのタイル
+const tileLoading = new Map();            // 読み込み中のタイル
+const MAX_MARKERS = 700;                  // 一度に表示するピンの上限（多すぎると動作が重くなる）
 const LS_VIEW = 'goshuin-map:view';
 
 function today() {
@@ -1074,16 +1141,20 @@ map.on('moveend', () => {
 });
 map.on('click', () => closeSheet());
 
-function iconFor(p) {
-  const n = recordsFor(p.id).length;
+function iconFor(p, n) {
   return L.divIcon({
     className: 'pin',
     html: `<div class="pin-in ${p.religion === 'shinto' ? 'shinto' : 'buddhist'}${n ? ' visited' : ''}">${p.religion === 'shinto' ? '⛩' : '卍'}${n ? `<b>${n}</b>` : ''}</div>`,
     iconSize: [30, 30], iconAnchor: [15, 15],
   });
 }
-function matches(p) {
-  const n = recordsFor(p.id).length;
+function recordCounts() {
+  const m = new Map();
+  for (const r of S.records) m.set(r.placeId, (m.get(r.placeId) || 0) + 1);
+  return m;
+}
+function matches(p, counts) {
+  const n = counts ? counts.get(p.id) || 0 : recordsFor(p.id).length;
   if (S.kind === 'shinto' && p.religion !== 'shinto') return false;
   if (S.kind === 'buddhist' && p.religion !== 'buddhist') return false;
   if (S.kind === 'visited' && !n) return false;
@@ -1091,22 +1162,42 @@ function matches(p) {
   if (S.q && !normalizeName(p.name).includes(normalizeName(S.q))) return false;
   return true;
 }
+/** 表示範囲（少し広め）にあるピンだけを描く。多すぎるときは地図の中心に近い順に上限まで */
 function renderMarkers() {
-  for (const p of S.places.values()) {
-    let m = S.markers.get(p.id);
-    if (matches(p)) {
-      if (!m) {
-        m = L.marker([p.lat, p.lon], { icon: iconFor(p), title: p.name, keyboard: false });
-        m.on('click', (e) => { L.DomEvent.stopPropagation(e); openDetail(p.id); });
-        S.markers.set(p.id, m);
-      } else m.setIcon(iconFor(p));
-      if (!markerLayer.hasLayer(m)) markerLayer.addLayer(m);
-    } else if (m && markerLayer.hasLayer(m)) markerLayer.removeLayer(m);
+  const counts = recordCounts();
+  const b = map.getBounds().pad(0.3);
+  const c = map.getCenter();
+  let cand = [];
+  for (const p of S.places.values()) if (b.contains([p.lat, p.lon]) && matches(p, counts)) cand.push(p);
+  let capped = false;
+  if (cand.length > MAX_MARKERS) {
+    capped = true;
+    const k = Math.cos((c.lat * Math.PI) / 180);
+    cand = cand
+      .map((p) => ({ p, d: (p.lat - c.lat) ** 2 + ((p.lon - c.lng) * k) ** 2 }))
+      .sort((a, b) => a.d - b.d).slice(0, MAX_MARKERS).map((x) => x.p);
   }
-  const visitedPlaces = new Set(S.records.map((r) => r.placeId)).size;
-  $('bookCnt').hidden = !visitedPlaces; $('bookCnt').textContent = visitedPlaces;
+  const want = new Set(cand.map((p) => p.id));
+  for (const [id, m] of S.markers) if (!want.has(id) && markerLayer.hasLayer(m)) markerLayer.removeLayer(m);
+  for (const p of cand) {
+    const n = counts.get(p.id) || 0;
+    const state = `${p.religion}|${n}`;
+    let m = S.markers.get(p.id);
+    if (!m) {
+      m = L.marker([p.lat, p.lon], { icon: iconFor(p, n), title: p.name, keyboard: false });
+      m.on('click', (e) => { L.DomEvent.stopPropagation(e); openDetail(p.id); });
+      m._state = state;
+      S.markers.set(p.id, m);
+    } else if (m._state !== state) { m.setIcon(iconFor(p, n)); m._state = state; }
+    if (!markerLayer.hasLayer(m)) markerLayer.addLayer(m);
+  }
+  if (capped && !S.cappedNotified) {
+    S.cappedNotified = true;
+    toast(`寺社が多いため、地図の中心に近い${MAX_MARKERS}件を表示しています。拡大するとすべて表示されます`);
+  }
+  $('bookCnt').hidden = !counts.size; $('bookCnt').textContent = counts.size;
 }
-function refreshMarker(id) { const m = S.markers.get(id); const p = S.places.get(id); if (m && p) m.setIcon(iconFor(p)); renderMarkers(); }
+function refreshMarker() { renderMarkers(); }
 
 /** 記録だけ残っている寺社（まだ検索していない場所）も地図に出すための最小データ */
 function placeFromRecord(r) {
@@ -1114,11 +1205,16 @@ function placeFromRecord(r) {
     addressSource: r.address ? 'record' : null, osmUrl: `https://www.openstreetmap.org/${r.placeId}`, wikipedia: null, wikidata: null,
     denomination: null, distance: null, wiki: null, kana: null, _fromRecord: true };
 }
-function addPlaces(list) {
+function addPlaces(list, { replace = false } = {}) {
   for (const p of list) {
     const old = S.places.get(p.id);
     if (!old) S.places.set(p.id, p);
-    else if (old._fromRecord) { p.wiki = old.wiki; S.places.set(p.id, p); }
+    else if (old._fromRecord || replace) {
+      // 取得済みの Wikipedia 情報・住所は引き継ぐ
+      p.wiki = old.wiki;
+      if (!p.address && old.address) { p.address = old.address; p.addressSource = old.addressSource; }
+      S.places.set(p.id, p);
+    }
   }
 }
 
@@ -1136,6 +1232,77 @@ function cellsInView(b) {
 }
 const slim = ({ tags, wiki, _wikiLoading, _addrLoading, _addrTried, ...rest }) => rest; // 保存用に軽くする
 
+// ── 事前に作った全国データ（地域タイル）の読み込み ──
+async function loadDataIndex() {
+  try {
+    const res = await fetch(DATA_BASE + 'index.json', { cache: 'no-cache' });
+    if (!res.ok) return null;
+    const idx = await res.json();
+    if (!idx?.version || !idx.tiles) return null;
+    // データが更新されていたら、端末に保存した古いタイルを消す
+    let saved = null;
+    try { saved = localStorage.getItem(LS_DATAVER); } catch {}
+    if (saved !== idx.version) {
+      await cellClear().catch(() => {});
+      try { localStorage.setItem(LS_DATAVER, idx.version); } catch {}
+    }
+    return idx;
+  } catch { return null; }
+}
+function loadTile(key) {
+  if (memTiles.has(key) || !S.dataIndex?.tiles[key]) return Promise.resolve(0);
+  if (tileLoading.has(key)) return tileLoading.get(key);
+  const job = (async () => {
+    const ck = 't:' + key;
+    let rows = (await cellGetMany([ck]).catch(() => new Map())).get(ck)?.rows;
+    if (!rows) {
+      const res = await fetch(`${DATA_BASE}tiles/${key}.json?v=${S.dataIndex.version}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      rows = (await res.json()).p || [];
+      cellPutMany([{ key: ck, ts: Date.now(), rows }]).catch(() => {});
+    }
+    addPlaces(rows.map(placeFromRow));
+    memTiles.add(key);
+    return rows.length;
+  })().finally(() => tileLoading.delete(key));
+  tileLoading.set(key, job);
+  return job;
+}
+const boundsObj = (b) => ({ south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() });
+/** 周りのタイルを裏で読み込んでおく（地図を少し動かしたときに待たないように） */
+let prefetchTimer = null;
+function prefetchAround(keys) {
+  clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(async () => {
+    const around = neighborTileKeys(keys).filter((k) => S.dataIndex.tiles[k] && !memTiles.has(k)).slice(0, 16);
+    if (!around.length) return;
+    await Promise.allSettled(around.map(loadTile));
+    renderMarkers();
+  }, 400);
+}
+/** 全国データから読み込む。成功したら true（失敗したら Overpass に切り替える） */
+async function staticSearch(auto, t0) {
+  if (map.getZoom() < (auto ? 12 : 11)) {
+    if (!auto) toast('範囲が広すぎます。もう少し拡大してください');
+    return true;
+  }
+  const keys = tileKeysInBounds(boundsObj(map.getBounds()));
+  const need = keys.filter((k) => S.dataIndex.tiles[k] && !memTiles.has(k));
+  if (need.length) {
+    setAreaBtn('⏳ 読み込み中…');
+    const results = await Promise.allSettled(need.map(loadTile));
+    renderMarkers();
+    if (results.some((r) => r.status === 'rejected')) return false;
+  }
+  prefetchAround(keys);
+  if (!auto) {
+    const d = S.dataIndex.generatedAt ? new Date(S.dataIndex.generatedAt).toLocaleDateString('ja-JP') : '';
+    if (need.length) toast(`読み込みました（${((Date.now() - t0) / 1000).toFixed(1)}秒）`);
+    else { toast(`表示中の範囲は読み込み済みです（${d}時点のデータ）\n最新の情報にするにはもう一度押してください`); S.lastManual = Date.now(); }
+  }
+  return true;
+}
+
 function setAreaBtn(text) { $('areaBtn').textContent = text || '🔍 このエリアを検索'; }
 
 /**
@@ -1145,7 +1312,8 @@ function setAreaBtn(text) { $('areaBtn').textContent = text || '🔍 このエ�
  */
 async function searchArea({ auto = false, force = false } = {}) {
   if (S.searching) { S.pendingSearch = { auto, force }; return; }
-  if (map.getZoom() < (auto ? 13 : 12)) {
+  const useStatic = S.dataIndex && !force;
+  if (!useStatic && map.getZoom() < (auto ? 13 : 12)) {
     if (!auto) toast('範囲が広すぎます。もう少し拡大してから検索してください');
     return;
   }
@@ -1154,6 +1322,11 @@ async function searchArea({ auto = false, force = false } = {}) {
   const t0 = Date.now();
   let tick = null;
   try {
+    // ⓪ 全国データ（事前作成）があればそれを使う。最新を取り直すとき（force）は Overpass に直接問い合わせる
+    if (useStatic) {
+      if (await staticSearch(auto, t0)) return;
+      if (map.getZoom() < 13) { if (!auto) toast('読み込みに失敗しました。拡大してもう一度お試しください', true); return; }
+    }
     const cells = cellsInView(map.getBounds());
     // ① 端末に保存済みのマスはすぐ表示
     let missing = cells;
@@ -1183,7 +1356,7 @@ async function searchArea({ auto = false, force = false } = {}) {
       east: (Math.max(...missing.map((c) => c.j)) + 1) * CELL_LON,
     };
     const list = await searchTemplesInBounds(bbox, { limit: AREA_LIMIT });
-    addPlaces(list);
+    addPlaces(list, { replace: force });
     renderMarkers();
 
     // ③ 結果をマスごとに保存（上限に達した＝取りこぼしがあるかもしれない時は保存しない）
@@ -1212,7 +1385,11 @@ async function searchArea({ auto = false, force = false } = {}) {
 // 地図を動かしたら、少し待ってから自動で読み込む
 let autoTimer = null;
 map.on('movestart', () => clearTimeout(autoTimer));
-map.on('moveend', () => { clearTimeout(autoTimer); autoTimer = setTimeout(() => searchArea({ auto: true }), 600); });
+map.on('moveend', () => {
+  renderMarkers();
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(() => searchArea({ auto: true }), S.dataIndex ? 250 : 600);
+});
 
 // ═════════════════════════════════════════════
 //  詳細シート
@@ -1326,7 +1503,7 @@ document.addEventListener('click', async (e) => {
   else if (act === 'openPlace') { $('listPanel').hidden = true; flyToPlace(id); }
   else if (act === 'export') exportBackup();
   else if (act === 'import') $('importFile').click();
-  else if (act === 'clearCache') { await cellClear().catch(() => {}); memCells.clear(); toast('地図データを削除しました'); }
+  else if (act === 'clearCache') { await cellClear().catch(() => {}); memCells.clear(); memTiles.clear(); toast('地図データを削除しました'); }
 });
 $('viewer').onclick = () => { $('viewer').hidden = true; };
 document.querySelectorAll('[data-close]').forEach((b) => { b.onclick = () => { $(b.dataset.close).hidden = true; }; });
@@ -1448,7 +1625,8 @@ function renderBook() {
   </div>
   <div class="backup" style="border-style:solid;border-color:var(--line)">
     <b>🗺 地図データ</b><br>
-    一度表示した地域の寺社データは、すばやく表示するため端末に7日間保存しています。古い情報が気になるときは削除してください（御朱印の記録は消えません）。
+    一度表示した地域の寺社データは、すばやく表示するため端末に保存しています。古い情報が気になるときは削除してください（御朱印の記録は消えません）。
+    ${S.dataIndex ? `<br><span class="muted">全国データ: ${esc(new Date(S.dataIndex.generatedAt).toLocaleDateString('ja-JP'))}時点・${S.dataIndex.count.toLocaleString()}件（毎週自動更新）</span>` : ''}
     <div class="row"><button class="btnSub" data-act="clearCache">地図データを削除</button></div>
   </div>`;
   $('bookBody').innerHTML = html;
@@ -1626,6 +1804,7 @@ $('btnLocate').onclick = () => {
     toast('記録を読み込めませんでした（プライベートブラウズでは保存できません）', true, 6000);
   }
   renderMarkers();
+  S.dataIndex = await loadDataIndex();
   searchArea({ auto: true });
 })();
 </script>
